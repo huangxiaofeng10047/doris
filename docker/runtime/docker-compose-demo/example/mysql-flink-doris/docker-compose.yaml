@@ -30,34 +30,34 @@ services:
     ports:
       - "3306:3306"
 
-  jobmanager:
-    image: apache/flink:1.15-scala_2.12
-    volumes:
-      - /data/flink/job/flink-doris-connector-1.15-1.2.1.jar:/opt/flink/lib/flink-doris-connector-1.15-1.2.1.jar
-      - /data/flink/job/flink-sql-connector-mysql-cdc-2.2.1.jar:/opt/flink/lib/flink-sql-connector-mysql-cdc-2.2.1.jar
-    expose:
-      - "6123"
-    ports:
-      - "8081:8081"
-    command: jobmanager
-    environment:
-      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+  # jobmanager:
+  #   image: apache/flink:1.15-scala_2.12
+  #   volumes:
+  #     - /data/flink/job/flink-doris-connector-1.15-1.2.1.jar:/opt/flink/lib/flink-doris-connector-1.15-1.2.1.jar
+  #     - /data/flink/job/flink-sql-connector-mysql-cdc-2.2.1.jar:/opt/flink/lib/flink-sql-connector-mysql-cdc-2.2.1.jar
+  #   expose:
+  #     - "6123"
+  #   ports:
+  #     - "8081:8081"
+  #   command: jobmanager
+  #   environment:
+  #     - JOB_MANAGER_RPC_ADDRESS=jobmanager
 
-  taskmanager:
-    image: apache/flink:1.15-scala_2.12
-    volumes:
-      - /data/flink/task/flink-doris-connector-1.15-1.2.1.jar:/opt/flink/lib/flink-doris-connector-1.15-1.2.1.jar
-      - /data/flink/task/flink-sql-connector-mysql-cdc-2.2.1.jar:/opt/flink/lib/flink-sql-connector-mysql-cdc-2.2.1.jar
-    expose:
-      - "6121"
-      - "6122"
-    depends_on:
-      - jobmanager
-    command: taskmanager
-    links:
-      - "jobmanager:jobmanager"
-    environment:
-      - JOB_MANAGER_RPC_ADDRESS=jobmanager
+  # taskmanager:
+  #   image: apache/flink:1.15-scala_2.12
+  #   volumes:
+  #     - /data/flink/task/flink-doris-connector-1.15-1.2.1.jar:/opt/flink/lib/flink-doris-connector-1.15-1.2.1.jar
+  #     - /data/flink/task/flink-sql-connector-mysql-cdc-2.2.1.jar:/opt/flink/lib/flink-sql-connector-mysql-cdc-2.2.1.jar
+  #   expose:
+  #     - "6121"
+  #     - "6122"
+  #   depends_on:
+  #     - jobmanager
+  #   command: taskmanager
+  #   links:
+  #     - "jobmanager:jobmanager"
+  #   environment:
+  #     - JOB_MANAGER_RPC_ADDRESS=jobmanager
 
   fe:
     image: apache/doris:2.0.0_alpha-fe-x86_64
@@ -65,12 +65,16 @@ services:
       - /data/apache-doris/fe/doris-meta/:/opt/apache-doris/fe/doris-meta
       - /data/apache-doris/fe/log/:/opt/apache-doris/fe/log
     environment:
-      - FE_SERVERS=fe1:172.20.80.1:9010
+      - FE_SERVERS=fe1:172.20.80.2:9010
       - FE_ID=1
     restart: on-failure
+    ports:
+      - "8030:8030"
+      - "9030:9030"
     networks:
       doris_net:
-        ipv4_address: 172.20.80.1
+      # 172.20.80.1 提示address is in use
+        ipv4_address: 172.20.80.2
 
   be:
     image: apache/doris:2.0.0_alpha-be-x86_64
@@ -78,14 +82,14 @@ services:
       - /data/apache-doris/be/storage/:/opt/apache-doris/be/storage
       - /data/apache-doris/be/log/:/opt/apache-doris/be/log
     environment:
-      - FE_SERVERS=fe1:172.20.80.1:9010
-      - BE_ADDR=172.20.80.2:9050
+      - FE_SERVERS=fe1:172.20.80.2:9010
+      - BE_ADDR=172.20.80.3:9050
     depends_on:
       - fe
     restart: on-failure
     networks:
       doris_net:
-        ipv4_address: 172.20.80.2
+        ipv4_address: 172.20.80.3
 networks:
   doris_net:
     ipam:
