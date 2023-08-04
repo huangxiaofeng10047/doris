@@ -26,9 +26,10 @@
 #include <queue>
 #include <utility>
 
+#include "bvar/bvar.h"
+#include "olap/memtable_memory_limiter.h"
 #include "runtime/exec_env.h"
 #include "runtime/fragment_mgr.h"
-#include "runtime/load_channel_mgr.h"
 #include "runtime/task_group/task_group.h"
 #include "service/backend_options.h"
 #include "util/mem_info.h"
@@ -37,6 +38,8 @@
 #include "util/runtime_profile.h"
 
 namespace doris {
+
+bvar::Adder<int64_t> g_memtrackerlimiter_cnt("memtrackerlimiter_cnt");
 
 // Save all MemTrackerLimiters in use.
 // Each group corresponds to several MemTrackerLimiters and has a lock.
@@ -80,6 +83,7 @@ MemTrackerLimiter::MemTrackerLimiter(Type type, const std::string& label, int64_
         _tracker_limiter_group_it = mem_tracker_limiter_pool[_group_num].trackers.insert(
                 mem_tracker_limiter_pool[_group_num].trackers.end(), this);
     }
+    g_memtrackerlimiter_cnt << 1;
 }
 
 MemTrackerLimiter::~MemTrackerLimiter() {
@@ -98,6 +102,7 @@ MemTrackerLimiter::~MemTrackerLimiter() {
             _tracker_limiter_group_it = mem_tracker_limiter_pool[_group_num].trackers.end();
         }
     }
+    g_memtrackerlimiter_cnt << -1;
 }
 
 MemTracker::Snapshot MemTrackerLimiter::make_snapshot() const {
@@ -240,7 +245,7 @@ std::string MemTrackerLimiter::log_process_usage_str() {
 
     // Add additional tracker printed when memory exceeds limit.
     snapshots.emplace_back(
-            ExecEnv::GetInstance()->load_channel_mgr()->mem_tracker()->make_snapshot());
+            ExecEnv::GetInstance()->memtable_memory_limiter()->mem_tracker()->make_snapshot());
 
     detail += "\nMemory Tracker Summary:";
     for (const auto& snapshot : snapshots) {

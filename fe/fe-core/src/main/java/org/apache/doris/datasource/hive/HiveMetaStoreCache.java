@@ -366,7 +366,7 @@ public class HiveMetaStoreCache {
         FileCacheValue result = new FileCacheValue();
         result.setSplittable(HiveUtil.isSplittable(inputFormat, new Path(location), jobConf));
         RemoteFileSystem fs = Env.getCurrentEnv().getExtMetaCacheMgr().getFsCache().getRemoteFileSystem(
-            new FileSystemCache.FileSystemCacheKey(FileSystemFactory.getLocationType(location), jobConf));
+                new FileSystemCache.FileSystemCacheKey(FileSystemFactory.getFSIdentity(location), jobConf));
         try {
             // For Tez engine, it may generate subdirectoies for "union" query.
             // So there may be files and directories in the table directory at the same time. eg:
@@ -378,7 +378,7 @@ public class HiveMetaStoreCache {
             RemoteFiles locatedFiles = fs.listLocatedFiles(location, true, true);
             for (RemoteFile remoteFile : locatedFiles.files()) {
                 Path srcPath = remoteFile.getPath();
-                Path convertedPath = S3Util.toScanRangeLocation(srcPath.toString());
+                Path convertedPath = S3Util.toScanRangeLocation(srcPath.toString(), catalog.getProperties());
                 if (!convertedPath.toString().equals(srcPath.toString())) {
                     remoteFile.setPath(convertedPath);
                 }
@@ -403,7 +403,7 @@ public class HiveMetaStoreCache {
         ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
         try {
             Thread.currentThread().setContextClassLoader(ClassLoader.getSystemClassLoader());
-            String finalLocation = S3Util.convertToS3IfNecessary(key.location);
+            String finalLocation = S3Util.convertToS3IfNecessary(key.location, catalog.getProperties());
             // disable the fs cache in FileSystem, or it will always from new FileSystem
             // and save it in cache when calling FileInputFormat.setInputPaths().
             try {
@@ -437,7 +437,8 @@ public class HiveMetaStoreCache {
                     for (int i = 0; i < splits.length; i++) {
                         org.apache.hadoop.mapred.FileSplit fs = ((org.apache.hadoop.mapred.FileSplit) splits[i]);
                         // todo: get modification time
-                        Path splitFilePath = S3Util.toScanRangeLocation(fs.getPath().toString());
+                        Path splitFilePath = S3Util.toScanRangeLocation(fs.getPath().toString(),
+                                    catalog.getProperties());
                         result.addSplit(new FileSplit(splitFilePath, fs.getStart(), fs.getLength(), -1, null, null));
                     }
                 }
@@ -762,8 +763,8 @@ public class HiveMetaStoreCache {
                                     .getPath() : null;
                     String acidVersionPath = new Path(baseOrDeltaPath, "_orc_acid_version").toUri().toString();
                     RemoteFileSystem fs = Env.getCurrentEnv().getExtMetaCacheMgr().getFsCache().getRemoteFileSystem(
-                        new FileSystemCache.FileSystemCacheKey(
-                            FileSystemFactory.getLocationType(baseOrDeltaPath.toUri().toString()), jobConf));
+                            new FileSystemCache.FileSystemCacheKey(
+                                    FileSystemFactory.getFSIdentity(baseOrDeltaPath.toUri().toString()), jobConf));
                     Status status = fs.exists(acidVersionPath);
                     if (status != Status.OK) {
                         if (status.getErrCode() == ErrCode.NOT_FOUND) {
@@ -784,7 +785,7 @@ public class HiveMetaStoreCache {
                 for (AcidUtils.ParsedDelta delta : directory.getCurrentDirectories()) {
                     String location = delta.getPath().toString();
                     RemoteFileSystem fs = Env.getCurrentEnv().getExtMetaCacheMgr().getFsCache().getRemoteFileSystem(
-                        new FileSystemCache.FileSystemCacheKey(FileSystemFactory.getLocationType(location), jobConf));
+                            new FileSystemCache.FileSystemCacheKey(FileSystemFactory.getFSIdentity(location), jobConf));
                     RemoteFiles locatedFiles = fs.listLocatedFiles(location, true, false);
                     if (delta.isDeleteDelta()) {
                         List<String> deleteDeltaFileNames = locatedFiles.files().stream().map(f -> f.getName()).filter(
@@ -802,7 +803,7 @@ public class HiveMetaStoreCache {
                 if (directory.getBaseDirectory() != null) {
                     String location = directory.getBaseDirectory().toString();
                     RemoteFileSystem fs = Env.getCurrentEnv().getExtMetaCacheMgr().getFsCache().getRemoteFileSystem(
-                        new FileSystemCache.FileSystemCacheKey(FileSystemFactory.getLocationType(location), jobConf));
+                            new FileSystemCache.FileSystemCacheKey(FileSystemFactory.getFSIdentity(location), jobConf));
                     RemoteFiles locatedFiles = fs.listLocatedFiles(location, true, false);
                     locatedFiles.files().stream().filter(
                             f -> f.getName().startsWith(HIVE_TRANSACTIONAL_ORC_BUCKET_PREFIX))
@@ -967,7 +968,7 @@ public class HiveMetaStoreCache {
         private AcidInfo acidInfo;
 
         public void addFile(RemoteFile file) {
-            if (isFileVisible(file.getName())) {
+            if (isFileVisible(file.getPath())) {
                 HiveFileStatus status = new HiveFileStatus();
                 status.setBlockLocations(file.getBlockLocations());
                 status.setPath(file.getPath());
@@ -979,7 +980,7 @@ public class HiveMetaStoreCache {
         }
 
         public void addSplit(FileSplit split) {
-            if (isFileVisible(split.getPath().getName())) {
+            if (isFileVisible(split.getPath())) {
                 splits.add(split);
             }
         }
@@ -997,10 +998,19 @@ public class HiveMetaStoreCache {
             this.acidInfo = acidInfo;
         }
 
-        private boolean isFileVisible(String filename) {
-            return StringUtils.isNotEmpty(filename)
-                        && !filename.startsWith(".")
-                        && !filename.startsWith("_");
+        private boolean isFileVisible(Path path) {
+            if (path == null || StringUtils.isEmpty(path.toString())) {
+                return false;
+            }
+            if (path.getName().startsWith(".") || path.getName().startsWith("_")) {
+                return false;
+            }
+            for (String name : path.toString().split("/")) {
+                if (name.startsWith(".hive-staging")) {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 

@@ -759,6 +759,17 @@ struct TFrontendPingFrontendRequest {
    2: required string token
 }
 
+struct TDiskInfo {
+    1: required string dirType
+    2: required string dir
+    3: required string filesystem
+    4: required i64 blocks
+    5: required i64 used
+    6: required i64 available
+    7: required i32 useRate
+    8: required string mountedOn
+}
+
 struct TFrontendPingFrontendResult {
     1: required TFrontendPingFrontendStatusCode status
     2: required string msg
@@ -767,6 +778,7 @@ struct TFrontendPingFrontendResult {
     5: required i64 replayedJournalId
     6: required string version
     7: optional i64 lastStartupTime
+    8: optional list<TDiskInfo> diskInfos
 }
 
 struct TPropertyVal {
@@ -965,6 +977,9 @@ enum TBinlogType {
   ALTER_JOB = 5,
   MODIFY_TABLE_ADD_OR_DROP_COLUMNS = 6,
   DUMMY = 7,
+  ALTER_DATABASE_PROPERTY = 8,
+  MODIFY_TABLE_PROPERTY = 9,
+  BARRIER = 10,
 }
 
 struct TBinlog {
@@ -976,6 +991,7 @@ struct TBinlog {
     6: optional string data
     7: optional i64 belong  // belong == -1 if type is not DUMMY
     8: optional i64 table_ref // only use for gc
+    9: optional bool remove_enable_cache
 }
 
 struct TGetBinlogResult {

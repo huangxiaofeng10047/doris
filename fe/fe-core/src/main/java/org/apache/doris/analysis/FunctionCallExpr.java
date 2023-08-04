@@ -547,7 +547,12 @@ public class FunctionCallExpr extends Expr {
 
         for (int i = 0; i < len; ++i) {
             if (i != 0) {
-                sb.append(", ");
+                if (fnName.getFunction().equalsIgnoreCase("group_concat")
+                        && orderByElements.size() > 0 && i == len - orderByElements.size()) {
+                    sb.append(" ");
+                } else {
+                    sb.append(", ");
+                }
             }
             if (ConnectContext.get() != null && ConnectContext.get().getState().isQuery() && i == 1
                     && (fnName.getFunction().equalsIgnoreCase("aes_decrypt")
@@ -584,12 +589,24 @@ public class FunctionCallExpr extends Expr {
             expr = this;
         }
         StringBuilder sb = new StringBuilder();
-        sb.append(((FunctionCallExpr) expr).fnName);
-        sb.append(paramsToSql());
-        if (fnName.getFunction().equalsIgnoreCase("json_quote")
-                || fnName.getFunction().equalsIgnoreCase("json_array")
-                || fnName.getFunction().equalsIgnoreCase("json_object")) {
-            return forJSON(sb.toString());
+
+        // when function is like or regexp, the expr generated sql should be like this
+        // eg: child1 like child2
+        if (fnName.getFunction().equalsIgnoreCase("like")
+                || fnName.getFunction().equalsIgnoreCase("regexp")) {
+            sb.append(children.get(0).toSql());
+            sb.append(" ");
+            sb.append(((FunctionCallExpr) expr).fnName);
+            sb.append(" ");
+            sb.append(children.get(1).toSql());
+        } else {
+            sb.append(((FunctionCallExpr) expr).fnName);
+            sb.append(paramsToSql());
+            if (fnName.getFunction().equalsIgnoreCase("json_quote")
+                    || fnName.getFunction().equalsIgnoreCase("json_array")
+                    || fnName.getFunction().equalsIgnoreCase("json_object")) {
+                return forJSON(sb.toString());
+            }
         }
         return sb.toString();
     }
@@ -1678,9 +1695,20 @@ public class FunctionCallExpr extends Expr {
                         && ((ArrayType) args[ix]).getItemType().isDecimalV3()))) {
                     continue;
                 } else if (!argTypes[i].matchesType(args[ix])
+                        && ROUND_FUNCTION_SET.contains(fnName.getFunction())
+                        && ConnectContext.get() != null
+                        && ConnectContext.get().getSessionVariable().roundPreciseDecimalV2Value
+                        && argTypes[i].isDecimalV2()
+                        && args[ix].isDecimalV3()) {
+                    uncheckedCastChild(ScalarType.createDecimalV3Type(ScalarType.MAX_DECIMALV2_PRECISION,
+                            ((ScalarType) argTypes[i]).getScalarScale()), i);
+                } else if (!argTypes[i].matchesType(args[ix])
                         && !(argTypes[i].isDecimalV3OrContainsDecimalV3()
                         && args[ix].isDecimalV3OrContainsDecimalV3())) {
                     // Do not do this cast if types are both decimalv3 with different precision/scale.
+                    uncheckedCastChild(args[ix], i);
+                } else if (fnName.getFunction().equalsIgnoreCase("if")
+                        && argTypes[i].isArrayType() && ((ArrayType) argTypes[i]).getItemType().isNull()) {
                     uncheckedCastChild(args[ix], i);
                 }
             }
@@ -1765,6 +1793,11 @@ public class FunctionCallExpr extends Expr {
         }
         // rewrite return type if is nested type function
         analyzeNestedFunction();
+        for (OrderByElement o : orderByElements) {
+            if (!o.getExpr().isAnalyzed) {
+                o.getExpr().analyzeImpl(analyzer);
+            }
+        }
     }
 
     // if return type is nested type, need to be determined the sub-element type
@@ -1942,7 +1975,7 @@ public class FunctionCallExpr extends Expr {
      * @return
      * @throws AnalysisException
      */
-    public Expr rewriteExpr() throws AnalysisException {
+    public Expr rewriteExpr(Analyzer analyzer) throws AnalysisException {
         if (isRewrote) {
             return this;
         }
@@ -1972,13 +2005,14 @@ public class FunctionCallExpr extends Expr {
 
         retExpr.fnParams = new FunctionParams(oriExpr.fnParams.isDistinct(), oriParamsExprs);
 
-        // retExpr changed to original function, so the fn should be null.
+        // retExpr changed to original function, should be analyzed again.
         retExpr.fn = null;
 
         // reset children
         retExpr.children.clear();
         retExpr.children.addAll(oriExpr.getChildren());
         retExpr.isRewrote = true;
+        retExpr.analyze(analyzer);
         return retExpr;
     }
 
