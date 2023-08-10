@@ -871,7 +871,6 @@ public class StmtExecutor {
             planner = preparedStmtCtx.planner;
             analyzer = preparedStmtCtx.analyzer;
             prepareStmt = preparedStmtCtx.stmt;
-            Preconditions.checkState(parsedStmt.isAnalyzed());
             LOG.debug("already prepared stmt: {}", preparedStmtCtx.stmtString);
             isExecuteStmt = true;
             if (!preparedStmtCtx.stmt.needReAnalyze()) {
@@ -903,6 +902,10 @@ public class StmtExecutor {
             prepareStmt.analyze(analyzer);
             // Need analyze inner statement
             parsedStmt = prepareStmt.getInnerStmt();
+            if (prepareStmt.getPreparedType() == PrepareStmt.PreparedType.STATEMENT) {
+                // Skip analyze, do it lazy
+                return;
+            }
         }
 
         // Convert show statement to select statement here
@@ -1407,7 +1410,6 @@ public class StmtExecutor {
                 LOG.warn("Fail to print fragment concurrency for Query.", e);
             }
         }
-
 
         Span fetchResultSpan = context.getTracer().spanBuilder("fetch result").setParent(Context.current()).startSpan();
         try (Scope scope = fetchResultSpan.makeCurrent()) {
