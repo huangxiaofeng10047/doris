@@ -56,7 +56,7 @@ spec:
       containers:
         - name: doris-cn-cluster1
           #Need to change to real mirror information
-          image: apache-doris-be:test
+          image: apache/doris:2.0.0_alpha-be-x86_64
           imagePullPolicy: IfNotPresent
           env:
             #Specify the startup type as k8s to bypass some restrictions of the official image initialization script

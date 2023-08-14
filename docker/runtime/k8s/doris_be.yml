@@ -55,8 +55,7 @@ spec:
     spec:
       containers:
         - name: doris-be-cluster1
-          #Need to change to real mirror information
-          image: apache-doris-be:test
+          image: apache/doris:2.0.0_alpha-be-x86_64
           imagePullPolicy: IfNotPresent
           env:
             #Specify the startup type as k8s to bypass some restrictions of the official image initialization script
@@ -80,6 +79,9 @@ spec:
             - name: sys
               mountPath: /etc/pki
               readOnly: true
+            - name: pv-doris
+              mountPath: /opt/apache-doris/be/storage
+                  
       volumes:
         - name: conf
           configMap:
@@ -87,6 +89,9 @@ spec:
         - name: sys
           hostPath:
             path: /etc/pki
+       - name: pv-doris
+         persistentVolumeClaim:
+            claimName: pv-claim-palo-be       
 ---
 apiVersion: v1
 kind: ConfigMap

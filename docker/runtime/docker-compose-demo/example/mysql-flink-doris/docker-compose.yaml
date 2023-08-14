@@ -24,6 +24,7 @@ services:
       MYSQL_ROOT_PASSWORD: 123456
       MYSQL_DATABASE: doris-test
       MYSQL_PASSWORD: 123456
+      TZ: Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
     command:
       --character-set-server=utf8
     hostname: mysql
@@ -60,13 +61,15 @@ services:
   #     - JOB_MANAGER_RPC_ADDRESS=jobmanager
 
   fe:
-    image: apache/doris:2.0.0_alpha-fe-x86_64
+    image: apache-doris:2.0.0-fe-hxf
     volumes:
       - /data/apache-doris/fe/doris-meta/:/opt/apache-doris/fe/doris-meta
       - /data/apache-doris/fe/log/:/opt/apache-doris/fe/log
+      - ./fe.conf:/opt/apache-doris/fe/conf/fe.conf
     environment:
       - FE_SERVERS=fe1:172.20.80.2:9010
       - FE_ID=1
+      - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
     restart: on-failure
     ports:
       - "8030:8030"
@@ -75,21 +78,92 @@ services:
       doris_net:
       # 172.20.80.1 提示address is in use
         ipv4_address: 172.20.80.2
+  zookeeper:
+   image: 'bitnami/zookeeper:3.4.12-r68'
+   hostname: zookeeper
+   container_name: zookeeper
+   ports:
+     - "2181:2181"
+   environment:
+     - ALLOW_ANONYMOUS_LOGIN=yes
+   networks:
+      doris_net:
+        ipv4_address: 172.20.80.4
 
+  kafka:
+   image: 'bitnami/kafka:2.0.0'
+   hostname: kafkabroker
+   container_name: kafkabroker
+   ports:
+     - "9092:9092"
+   environment:
+     - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+     - ALLOW_PLAINTEXT_LISTENER=yes
+   networks:
+      doris_net:
+        ipv4_address: 172.20.80.5
   be:
-    image: apache/doris:2.0.0_alpha-be-x86_64
+    image: apache-doris:2.0.0-be-hxf
+    ulimits:
+      nproc: 2000000
+      nofile:
+        soft: 65536
+        hard: 65536
     volumes:
       - /data/apache-doris/be/storage/:/opt/apache-doris/be/storage
       - /data/apache-doris/be/log/:/opt/apache-doris/be/log
     environment:
       - FE_SERVERS=fe1:172.20.80.2:9010
       - BE_ADDR=172.20.80.3:9050
+      - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
     depends_on:
       - fe
     restart: on-failure
     networks:
       doris_net:
         ipv4_address: 172.20.80.3
+  doris--minio:
+    image: minio/minio
+    container_name: doris--minio
+    hostname: doris--minio
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+      - MINIO_REGION=xian
+    ports:
+      - 9001:9001
+      - 9000:9000
+    networks:
+      doris_net:
+        ipv4_address: 172.20.80.6
+    command: ["server", "/data", "--console-address", ":9001"]
+  doris--mc:
+    depends_on:
+      - doris--minio
+    image: minio/mc
+    container_name: doris--mc
+    environment:
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_REGION=xian
+    networks:
+      doris_net:
+        ipv4_address: 172.20.80.7
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc config host add minio http://doris--minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
+      /usr/bin/mc rm -r --force minio/warehouse;
+       /usr/bin/mc rm -r --force minio/test;
+        /usr/bin/mc rm -r --force minio/log;
+      /usr/bin/mc mb minio/warehouse;
+      /usr/bin/mc mb minio/test;
+      /usr/bin/mc mb minio/log;
+      /usr/bin/mc policy set public minio/warehouse;
+      /usr/bin/mc policy set public minio/test;
+      /usr/bin/mc policy set public minio/log;
+
+      exit 0;
+      "        
 networks:
   doris_net:
     ipam:
