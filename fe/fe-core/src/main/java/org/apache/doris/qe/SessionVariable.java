@@ -28,6 +28,7 @@ import org.apache.doris.common.io.Writable;
 import org.apache.doris.common.util.TimeUtils;
 import org.apache.doris.nereids.metrics.Event;
 import org.apache.doris.nereids.metrics.EventSwitchParser;
+import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.qe.VariableMgr.VarAttr;
 import org.apache.doris.thrift.TQueryOptions;
 import org.apache.doris.thrift.TResourceLimit;
@@ -365,6 +366,8 @@ public class SessionVariable implements Serializable, Writable {
 
     public static final String PARALLEL_SYNC_ANALYZE_TASK_NUM = "parallel_sync_analyze_task_num";
 
+    public static final String TRUNCATE_CHAR_OR_VARCHAR_COLUMNS = "truncate_char_or_varchar_columns";
+
     public static final String CBO_CPU_WEIGHT = "cbo_cpu_weight";
 
     public static final String CBO_MEM_WEIGHT = "cbo_mem_weight";
@@ -632,7 +635,7 @@ public class SessionVariable implements Serializable, Writable {
     @VariableMgr.VarAttr(name = EXTRACT_WIDE_RANGE_EXPR, needForward = true)
     public boolean extractWideRangeExpr = true;
 
-    @VariableMgr.VarAttr(name = ENABLE_NEREIDS_DML)
+    @VariableMgr.VarAttr(name = ENABLE_NEREIDS_DML, needForward = true)
     public boolean enableNereidsDML = false;
 
     @VariableMgr.VarAttr(name = ENABLE_STRICT_CONSISTENCY_DML, needForward = true)
@@ -1085,6 +1088,19 @@ public class SessionVariable implements Serializable, Writable {
 
     @VariableMgr.VarAttr(name = PARALLEL_SYNC_ANALYZE_TASK_NUM)
     public int parallelSyncAnalyzeTaskNum = 2;
+
+    @VariableMgr.VarAttr(name = TRUNCATE_CHAR_OR_VARCHAR_COLUMNS,
+            description = {"是否按照表的 schema 来截断 char 或者 varchar 列。默认为 false。\n"
+                    + "因为外表会存在表的 schema 中 char 或者 varchar 列的最大长度和底层 parquet 或者 orc 文件中的 schema 不一致"
+                    + "的情况。此时开启改选项，会按照表的 schema 中的最大长度进行截断。",
+                    "Whether to truncate char or varchar columns according to the table's schema. "
+                            + "The default is false.\n"
+                    + "Because the maximum length of the char or varchar column in the schema of the table"
+                            + " is inconsistent with the schema in the underlying parquet or orc file."
+                    + " At this time, if the option is turned on, it will be truncated according to the maximum length"
+                            + " in the schema of the table."},
+            needForward = true)
+    public boolean truncateCharOrVarcharColumns = false;
 
     // If this fe is in fuzzy mode, then will use initFuzzyModeVariables to generate some variables,
     // not the default value set in the code.
@@ -1929,9 +1945,17 @@ public class SessionVariable implements Serializable, Writable {
         return nthOptimizedPlan;
     }
 
-    public Set<String> getDisableNereidsRules() {
+    public Set<String> getDisableNereidsRuleNames() {
         return Arrays.stream(disableNereidsRules.split(",[\\s]*"))
                 .map(rule -> rule.toUpperCase(Locale.ROOT))
+                .collect(ImmutableSet.toImmutableSet());
+    }
+
+    public Set<Integer> getDisableNereidsRules() {
+        return Arrays.stream(disableNereidsRules.split(",[\\s]*"))
+                .filter(rule -> !rule.isEmpty())
+                .map(rule -> rule.toUpperCase(Locale.ROOT))
+                .map(rule -> RuleType.valueOf(rule).type())
                 .collect(ImmutableSet.toImmutableSet());
     }
 
@@ -2060,6 +2084,14 @@ public class SessionVariable implements Serializable, Writable {
         return externalTableAnalyzePartNum;
     }
 
+    public boolean isTruncateCharOrVarcharColumns() {
+        return truncateCharOrVarcharColumns;
+    }
+
+    public void setTruncateCharOrVarcharColumns(boolean truncateCharOrVarcharColumns) {
+        this.truncateCharOrVarcharColumns = truncateCharOrVarcharColumns;
+    }
+
     /**
      * Serialize to thrift object.
      * Used for rest api.
@@ -2144,6 +2176,7 @@ public class SessionVariable implements Serializable, Writable {
         tResult.setEnableOrcLazyMat(enableOrcLazyMat);
 
         tResult.setEnableInsertStrict(enableInsertStrict);
+        tResult.setTruncateCharOrVarcharColumns(truncateCharOrVarcharColumns);
 
         return tResult;
     }
@@ -2457,3 +2490,4 @@ public class SessionVariable implements Serializable, Writable {
         return connectContext.getSessionVariable().enableAggState;
     }
 }
+
