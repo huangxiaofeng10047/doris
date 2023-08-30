@@ -478,7 +478,30 @@ public class FunctionCallExpr extends Expr {
             aggFnParams = aggFnParams
                     .clone(newParams);
         }
-        return super.substituteImpl(smap, disjunctsMap, analyzer);
+        if (isImplicitCast()) {
+            return getChild(0).substituteImpl(smap, disjunctsMap, analyzer);
+        }
+        if (smap != null) {
+            Expr substExpr = smap.get(this);
+            if (substExpr != null) {
+                return substExpr.clone();
+            }
+        }
+        if (Expr.IS_OR_PREDICATE.apply(this) && disjunctsMap != null) {
+            smap = disjunctsMap;
+            disjunctsMap = null;
+        }
+        for (int i = 0; i < children.size(); ++i) {
+            // we shouldn't change literal expr in function call expr
+            if (!(children.get(i) instanceof LiteralExpr)) {
+                children.set(i, children.get(i).substituteImpl(smap, disjunctsMap, analyzer));
+            }
+        }
+        // SlotRefs must remain analyzed to support substitution across query blocks. All
+        // other exprs must be analyzed again after the substitution to add implicit casts
+        // and for resolving their correct function signature.
+        resetAnalysisState();
+        return this;
     }
 
     @Override
@@ -534,8 +557,8 @@ public class FunctionCallExpr extends Expr {
                 || fnName.getFunction().equalsIgnoreCase("hours_diff")
                 || fnName.getFunction().equalsIgnoreCase("minutes_diff")
                 || fnName.getFunction().equalsIgnoreCase("seconds_diff")) {
-            sb.append(children.get(1).toSql()).append(", ");
-            sb.append(children.get(0).toSql()).append(")");
+            sb.append(children.get(0).toSql()).append(", ");
+            sb.append(children.get(1).toSql()).append(")");
             return sb.toString();
         }
         // used by nereids END
@@ -939,7 +962,7 @@ public class FunctionCallExpr extends Expr {
 
         if (fnName.getFunction().equalsIgnoreCase(FunctionSet.QUANTILE_UNION)) {
             if (children.size() != 1) {
-                throw new AnalysisException(fnName + "function could only have one child");
+                throw new AnalysisException(fnName + " function could only have one child");
             }
             Type inputType = getChild(0).getType();
             if (!inputType.isQuantileStateType()) {
@@ -1190,6 +1213,21 @@ public class FunctionCallExpr extends Expr {
                 throw new AnalysisException(getFunctionNotFoundError(collectChildReturnTypes()));
             }
             fn.setReturnType(getChild(0).getType());
+        }
+
+        // make nested type with function param can be Compatible otherwise be will not deal with type
+        if (fnName.getFunction().equalsIgnoreCase("array_position")
+                || fnName.getFunction().equalsIgnoreCase("array_contains")
+                || fnName.getFunction().equalsIgnoreCase("countequal")) {
+            Type[] childTypes = collectChildReturnTypes();
+            Type compatibleType = ((ArrayType) childTypes[0]).getItemType();
+            for (int i = 1; i < childTypes.length; ++i) {
+                compatibleType = Type.getAssignmentCompatibleType(compatibleType, childTypes[i], true);
+                if (compatibleType == Type.INVALID) {
+                    throw new AnalysisException(getFunctionNotFoundError(collectChildReturnTypes()));
+                }
+                uncheckedCastChild(compatibleType, i);
+            }
         }
     }
 
@@ -1669,10 +1707,6 @@ public class FunctionCallExpr extends Expr {
                         || fnName.getFunction().equalsIgnoreCase("hist"))
                         && children.get(0).getType().isDecimalV3() && args[ix].isDecimalV3()) {
                     continue;
-                } else if (fnName.getFunction().equalsIgnoreCase("array")
-                        && (children.get(0).getType().isDecimalV3() && args[ix].isDecimalV3()
-                        || children.get(0).getType().isDatetimeV2() && args[ix].isDatetimeV2())) {
-                    continue;
                 } else if ((fnName.getFunction().equalsIgnoreCase("array_min") || fnName.getFunction()
                         .equalsIgnoreCase("array_max") || fnName.getFunction().equalsIgnoreCase("element_at"))
                         && ((
@@ -1702,8 +1736,6 @@ public class FunctionCallExpr extends Expr {
                         || fnName.getFunction().equalsIgnoreCase("array_shuffle")
                         || fnName.getFunction().equalsIgnoreCase("shuffle")
                         || fnName.getFunction().equalsIgnoreCase("array_except")
-                        || fnName.getFunction().equalsIgnoreCase("array_contains")
-                        || fnName.getFunction().equalsIgnoreCase("array_position")
                         || fnName.getFunction().equalsIgnoreCase("width_bucket"))
                         && (args[ix].isDecimalV3() || (children.get(0).getType().isArrayType()
                         && (((ArrayType) children.get(0).getType()).getItemType().isDecimalV3())

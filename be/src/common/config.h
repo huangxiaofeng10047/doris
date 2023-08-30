@@ -332,6 +332,9 @@ DECLARE_mInt32(default_num_rows_per_column_file_block);
 DECLARE_mInt32(pending_data_expire_time_sec);
 // inc_rowset snapshot rs sweep time interval
 DECLARE_mInt32(tablet_rowset_stale_sweep_time_sec);
+// tablet stale rowset sweep by threshold size
+DECLARE_Bool(tablet_rowset_stale_sweep_by_size);
+DECLARE_mInt32(tablet_rowset_stale_sweep_threshold_size);
 // garbage sweep policy
 DECLARE_Int32(max_garbage_sweep_interval);
 DECLARE_Int32(min_garbage_sweep_interval);
@@ -778,6 +781,11 @@ DECLARE_mInt32(mem_tracker_consume_min_size_bytes);
 // In most cases, it does not need to be modified.
 DECLARE_mDouble(tablet_version_graph_orphan_vertex_ratio);
 
+// number of brpc stream per OlapTableSinkV2
+DECLARE_Int32(num_streams_per_sink);
+// timeout for open stream sink rpc in ms
+DECLARE_Int64(open_stream_sink_timeout_ms);
+
 // max send batch parallelism for OlapTableSink
 // The value set by the user for send_batch_parallelism is not allowed to exceed max_send_batch_parallelism_per_job,
 // if exceed, the value of send_batch_parallelism would be max_send_batch_parallelism_per_job
@@ -821,6 +829,7 @@ DECLARE_mInt32(max_remote_storage_count);
 // and the valid values are: 0.9.0.x, 0.8.x.y.
 DECLARE_String(kafka_api_version_request);
 DECLARE_String(kafka_broker_version_fallback);
+DECLARE_mString(kafka_debug);
 
 // The number of pool siz of routine load consumer.
 // If you meet the error describe in https://github.com/edenhill/librdkafka/issues/3608
@@ -937,6 +946,9 @@ DECLARE_Int32(doris_remote_scanner_thread_pool_queue_size);
 
 // limit the queue of pending batches which will be sent by a single nodechannel
 DECLARE_mInt64(nodechannel_pending_queue_max_bytes);
+
+// The batch size for sending data by brpc streaming client
+DECLARE_mInt64(brpc_streaming_client_batch_bytes);
 
 // Max waiting time to wait the "plan fragment start" rpc.
 // If timeout, the fragment will be cancelled.
@@ -1115,6 +1127,10 @@ DECLARE_mBool(enable_merge_on_write_correctness_check);
 
 // The secure path with user files, used in the `local` table function.
 DECLARE_mString(user_files_secure_path);
+
+// This threshold determines how many partitions will be allocated for window function get topn.
+// and if this threshold is exceeded, the remaining data will be pass through to other node directly.
+DECLARE_Int32(partition_topn_partition_threshold);
 
 #ifdef BE_TEST
 // test s3

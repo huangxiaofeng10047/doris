@@ -54,6 +54,7 @@
 #include "olap/binlog.h"
 #include "olap/cumulative_compaction.h"
 #include "olap/data_dir.h"
+#include "olap/full_compaction.h"
 #include "olap/memtable_flush_executor.h"
 #include "olap/olap_define.h"
 #include "olap/olap_meta.h"
@@ -162,21 +163,29 @@ StorageEngine::~StorageEngine() {
     _s_instance = nullptr;
 }
 
-void StorageEngine::load_data_dirs(const std::vector<DataDir*>& data_dirs) {
+Status StorageEngine::load_data_dirs(const std::vector<DataDir*>& data_dirs) {
     std::vector<std::thread> threads;
-    for (auto data_dir : data_dirs) {
-        threads.emplace_back([data_dir] {
-            auto res = data_dir->load();
-            if (!res.ok()) {
-                LOG(WARNING) << "io error when init load tables. res=" << res
-                             << ", data dir=" << data_dir->path();
-                // TODO(lingbin): why not exit progress, to force OP to change the conf
-            }
-        });
+    std::vector<Status> results(data_dirs.size());
+    for (size_t i = 0; i < data_dirs.size(); ++i) {
+        threads.emplace_back(
+                [&results, data_dir = data_dirs[i]](size_t index) {
+                    results[index] = data_dir->load();
+                    if (!results[index].ok()) {
+                        LOG(WARNING) << "io error when init load tables. res=" << results[index]
+                                     << ", data dir=" << data_dir->path();
+                    }
+                },
+                i);
     }
     for (auto& thread : threads) {
         thread.join();
     }
+    for (const auto& result : results) {
+        if (!result.ok()) {
+            return result;
+        }
+    }
+    return Status::OK();
 }
 
 Status StorageEngine::_open() {
@@ -191,7 +200,7 @@ Status StorageEngine::_open() {
     RETURN_NOT_OK_STATUS_WITH_WARN(_check_file_descriptor_number(), "check fd number failed");
 
     auto dirs = get_stores<false>();
-    load_data_dirs(dirs);
+    RETURN_IF_ERROR(load_data_dirs(dirs));
 
     _memtable_flush_executor.reset(new MemTableFlushExecutor());
     _memtable_flush_executor->init(dirs);
@@ -881,7 +890,6 @@ void StorageEngine::_clean_unused_txns() {
             // currently just remove them from memory
             // nullptr to indicate not remove them from meta store
             _txn_manager->force_rollback_tablet_related_txns(nullptr, tablet_info.tablet_id,
-                                                             tablet_info.schema_hash,
                                                              tablet_info.tablet_uid);
         }
     }
@@ -1140,6 +1148,11 @@ void StorageEngine::create_cumulative_compaction(
 void StorageEngine::create_base_compaction(TabletSharedPtr best_tablet,
                                            std::shared_ptr<BaseCompaction>& base_compaction) {
     base_compaction.reset(new BaseCompaction(best_tablet));
+}
+
+void StorageEngine::create_full_compaction(TabletSharedPtr best_tablet,
+                                           std::shared_ptr<FullCompaction>& full_compaction) {
+    full_compaction.reset(new FullCompaction(best_tablet));
 }
 
 void StorageEngine::create_single_replica_compaction(

@@ -82,6 +82,8 @@ COMMA: ',';
 DOT: '.';
 LEFT_BRACKET: '[';
 RIGHT_BRACKET: ']';
+LEFT_BRACE: '{';
+RIGHT_BRACE: '}';
 
 // TODO: add a doc to list reserved words
 
@@ -225,6 +227,7 @@ IS_NULL_PRED: 'IS_NULL_PRED';
 IS_NOT_NULL_PRED: 'IS_NOT_NULL_PRED';
 ITEMS: 'ITEMS';
 JOIN: 'JOIN';
+KEY: 'KEY';
 KEYS: 'KEYS';
 LABEL: 'LABEL';
 LAST: 'LAST';
@@ -271,6 +274,7 @@ OPTION: 'OPTION';
 OPTIONS: 'OPTIONS';
 OR: 'OR';
 ORDER: 'ORDER';
+ORDERED: 'ORDERED';
 OUT: 'OUT';
 OUTER: 'OUTER';
 OUTFILE: 'OUTFILE';
@@ -356,6 +360,7 @@ SYSTEM_TIME: 'SYSTEM_TIME';
 SYSTEM_VERSION: 'SYSTEM_VERSION';
 TABLE: 'TABLE';
 TABLES: 'TABLES';
+TABLET: 'TABLET';
 TABLESAMPLE: 'TABLESAMPLE';
 TBLPROPERTIES: 'TBLPROPERTIES';
 TEMPORARY: 'TEMPORARY' | 'TEMP';
@@ -402,6 +407,9 @@ WITHIN: 'WITHIN';
 YEAR: 'YEAR';
 ZONE: 'ZONE';
 DATEV2: 'DATEV2';
+S3: 'S3';
+HDFS: 'HDFS';
+BROKER: 'BROKER';
 //--DORIS-KEYWORD-LIST-END
 //============================
 // End of the keywords list
@@ -433,11 +441,16 @@ HINT_END: '*/';
 ATSIGN: '@';
 DOUBLEATSIGN: '@@';
 
-STRING
+STRING_LITERAL
     : '\'' ( ~('\''|'\\') | ('\\' .) )* '\''
     | '"' ( ~('"'|'\\') | ('\\' .) )* '"'
     | 'R\'' (~'\'')* '\''
     | 'R"'(~'"')* '"'
+    ;
+
+LEADING_STRING
+    : LEFT_BRACE
+    | RIGHT_BRACE
     ;
 
 BIGINT_LITERAL

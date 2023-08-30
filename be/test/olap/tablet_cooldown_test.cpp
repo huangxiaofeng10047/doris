@@ -261,9 +261,13 @@ public:
         EngineOptions options;
         options.store_paths = paths;
         doris::StorageEngine::open(options, &k_engine);
+        ExecEnv* exec_env = doris::ExecEnv::GetInstance();
+        exec_env->set_memtable_memory_limiter(new MemTableMemoryLimiter());
     }
 
     static void TearDownTestSuite() {
+        ExecEnv* exec_env = doris::ExecEnv::GetInstance();
+        exec_env->set_memtable_memory_limiter(nullptr);
         if (k_engine != nullptr) {
             k_engine->stop();
             delete k_engine;
@@ -422,8 +426,8 @@ void createTablet(StorageEngine* engine, TabletSharedPtr* tablet, int64_t replic
         RowsetSharedPtr rowset = tablet_rs.second;
         TabletPublishStatistics stats;
         st = engine->txn_manager()->publish_txn(meta, write_req.partition_id, write_req.txn_id,
-                                                (*tablet)->tablet_id(), (*tablet)->schema_hash(),
-                                                (*tablet)->tablet_uid(), version, &stats);
+                                                (*tablet)->tablet_id(), (*tablet)->tablet_uid(),
+                                                version, &stats);
         ASSERT_EQ(Status::OK(), st);
         st = (*tablet)->add_inc_rowset(rowset);
         ASSERT_EQ(Status::OK(), st);

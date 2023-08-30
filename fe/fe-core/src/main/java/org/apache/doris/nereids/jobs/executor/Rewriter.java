@@ -20,7 +20,6 @@ package org.apache.doris.nereids.jobs.executor;
 import org.apache.doris.nereids.CascadesContext;
 import org.apache.doris.nereids.jobs.rewrite.CostBasedRewriteJob;
 import org.apache.doris.nereids.jobs.rewrite.RewriteJob;
-import org.apache.doris.nereids.processor.pre.EliminateLogicalSelectHint;
 import org.apache.doris.nereids.rules.RuleSet;
 import org.apache.doris.nereids.rules.RuleType;
 import org.apache.doris.nereids.rules.analysis.AdjustAggregateNullableForEmptySet;
@@ -42,10 +41,12 @@ import org.apache.doris.nereids.rules.rewrite.CheckDataTypes;
 import org.apache.doris.nereids.rules.rewrite.CheckMatchExpression;
 import org.apache.doris.nereids.rules.rewrite.CheckMultiDistinct;
 import org.apache.doris.nereids.rules.rewrite.CollectFilterAboveConsumer;
+import org.apache.doris.nereids.rules.rewrite.CollectJoinConstraint;
 import org.apache.doris.nereids.rules.rewrite.CollectProjectAboveConsumer;
 import org.apache.doris.nereids.rules.rewrite.ColumnPruning;
 import org.apache.doris.nereids.rules.rewrite.ConvertInnerOrCrossJoin;
 import org.apache.doris.nereids.rules.rewrite.CountDistinctRewrite;
+import org.apache.doris.nereids.rules.rewrite.CountLiteralToCountStar;
 import org.apache.doris.nereids.rules.rewrite.DeferMaterializeTopNResult;
 import org.apache.doris.nereids.rules.rewrite.EliminateAggregate;
 import org.apache.doris.nereids.rules.rewrite.EliminateDedupJoinCondition;
@@ -68,6 +69,7 @@ import org.apache.doris.nereids.rules.rewrite.InferFilterNotNull;
 import org.apache.doris.nereids.rules.rewrite.InferJoinNotNull;
 import org.apache.doris.nereids.rules.rewrite.InferPredicates;
 import org.apache.doris.nereids.rules.rewrite.InferSetOperatorDistinct;
+import org.apache.doris.nereids.rules.rewrite.LeadingJoin;
 import org.apache.doris.nereids.rules.rewrite.MergeFilters;
 import org.apache.doris.nereids.rules.rewrite.MergeOneRowRelationIntoUnion;
 import org.apache.doris.nereids.rules.rewrite.MergeProjects;
@@ -78,6 +80,7 @@ import org.apache.doris.nereids.rules.rewrite.PruneFileScanPartition;
 import org.apache.doris.nereids.rules.rewrite.PruneOlapScanPartition;
 import org.apache.doris.nereids.rules.rewrite.PruneOlapScanTablet;
 import org.apache.doris.nereids.rules.rewrite.PullUpCteAnchor;
+import org.apache.doris.nereids.rules.rewrite.PushConjunctsIntoEsScan;
 import org.apache.doris.nereids.rules.rewrite.PushConjunctsIntoJdbcScan;
 import org.apache.doris.nereids.rules.rewrite.PushFilterInsideJoin;
 import org.apache.doris.nereids.rules.rewrite.PushProjectIntoOneRowRelation;
@@ -156,8 +159,6 @@ public class Rewriter extends AbstractBatchJobExecutor {
                             new ApplyToJoin()
                     )
             ),
-            // we should eliminate hint after "Subquery unnesting" because some hint maybe exist in the CTE or subquery.
-            custom(RuleType.ELIMINATE_HINT, EliminateLogicalSelectHint::new),
             topic("Eliminate optimization",
                     bottomUp(
                             new EliminateLimit(),
@@ -174,6 +175,7 @@ public class Rewriter extends AbstractBatchJobExecutor {
             topDown(
                     new SimplifyAggGroupBy(),
                     new NormalizeAggregate(),
+                    new CountLiteralToCountStar(),
                     new NormalizeSort()
             ),
             topic("Window analysis",
@@ -219,6 +221,15 @@ public class Rewriter extends AbstractBatchJobExecutor {
                     bottomUp(new EliminateNotNull()),
                     topDown(new ConvertInnerOrCrossJoin())
             ),
+            topic("LEADING JOIN",
+                bottomUp(
+                    new CollectJoinConstraint()
+                ),
+                custom(RuleType.LEADING_JOIN, LeadingJoin::new),
+                bottomUp(
+                    new ExpressionRewrite(CheckLegalityAfterRewrite.INSTANCE)
+                )
+            ),
             topic("Column pruning and infer predicate",
                     custom(RuleType.COLUMN_PRUNING, ColumnPruning::new),
                     custom(RuleType.INFER_PREDICATES, InferPredicates::new),
@@ -233,8 +244,6 @@ public class Rewriter extends AbstractBatchJobExecutor {
                     topDown(new PushFilterInsideJoin()),
                     topDown(new ExpressionNormalization())
             ),
-
-            custom(RuleType.CHECK_DATA_TYPES, CheckDataTypes::new),
 
             // this rule should invoke after ColumnPruning
             custom(RuleType.ELIMINATE_UNNECESSARY_PROJECT, EliminateUnnecessaryProject::new),
@@ -271,7 +280,8 @@ public class Rewriter extends AbstractBatchJobExecutor {
                     topDown(
                             new PruneOlapScanPartition(),
                             new PruneFileScanPartition(),
-                            new PushConjunctsIntoJdbcScan()
+                            new PushConjunctsIntoJdbcScan(),
+                            new PushConjunctsIntoEsScan()
                     )
             ),
             topic("MV optimization",
@@ -292,6 +302,7 @@ public class Rewriter extends AbstractBatchJobExecutor {
             ),
             // this rule batch must keep at the end of rewrite to do some plan check
             topic("Final rewrite and check",
+                    custom(RuleType.CHECK_DATA_TYPES, CheckDataTypes::new),
                     custom(RuleType.ENSURE_PROJECT_ON_TOP_JOIN, EnsureProjectOnTopJoin::new),
                     topDown(
                             new PushdownFilterThroughProject(),
