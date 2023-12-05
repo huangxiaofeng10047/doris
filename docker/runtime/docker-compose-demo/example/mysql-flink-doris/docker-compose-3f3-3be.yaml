@@ -1,0 +1,196 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+version: "3"
+services:
+  # mysql:
+  #   image: mysql:8.0.31
+  #   volumes:
+  #     - /data/mysql/:/var/lib/mysql
+  #   environment:
+  #     MYSQL_ROOT_PASSWORD: 123456
+  #     MYSQL_DATABASE: doris-test
+  #     MYSQL_PASSWORD: 123456
+  #     TZ: Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
+  #   command:
+  #     --character-set-server=utf8
+  #   hostname: mysql
+  #   ports:
+  #     - "3306:3306"
+
+  # jobmanager:
+  #   image: apache/flink:1.15-scala_2.12
+  #   volumes:
+  #     - /data/flink/job/flink-doris-connector-1.15-1.2.1.jar:/opt/flink/lib/flink-doris-connector-1.15-1.2.1.jar
+  #     - /data/flink/job/flink-sql-connector-mysql-cdc-2.2.1.jar:/opt/flink/lib/flink-sql-connector-mysql-cdc-2.2.1.jar
+  #   expose:
+  #     - "6123"
+  #   ports:
+  #     - "8081:8081"
+  #   command: jobmanager
+  #   environment:
+  #     - JOB_MANAGER_RPC_ADDRESS=jobmanager
+
+  # taskmanager:
+  #   image: apache/flink:1.15-scala_2.12
+  #   volumes:
+  #     - /data/flink/task/flink-doris-connector-1.15-1.2.1.jar:/opt/flink/lib/flink-doris-connector-1.15-1.2.1.jar
+  #     - /data/flink/task/flink-sql-connector-mysql-cdc-2.2.1.jar:/opt/flink/lib/flink-sql-connector-mysql-cdc-2.2.1.jar
+  #   expose:
+  #     - "6121"
+  #     - "6122"
+  #   depends_on:
+  #     - jobmanager
+  #   command: taskmanager
+  #   links:
+  #     - "jobmanager:jobmanager"
+  #   environment:
+  #     - JOB_MANAGER_RPC_ADDRESS=jobmanager
+
+  fe1:
+    image: apache-doris:2.0.2-fe-hxf
+    volumes:
+      - /data/apache-doris/fe1/doris-meta/:/opt/apache-doris/fe/doris-meta
+      - /data/apache-doris/fe1/log/:/opt/apache-doris/fe/log
+      # - ./fe.conf:/opt/apache-doris/fe/conf/fe.conf
+    environment:
+      - FE_SERVERS=fe1:173.21.80.2:9010,fe2:173.21.80.3:9010,fe3:173.21.80.4:9010
+      - FE_ID=1
+      - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
+    restart: on-failure
+    ports:
+      - "8031:8030"
+      - "9031:9030"
+    networks:
+      doris_net:
+      # 173.21.80.1 提示address is in use
+        ipv4_address: 173.21.80.2
+  fe2:
+    image: apache-doris:2.0.2-fe-hxf
+    volumes:
+      - /data/apache-doris/fe2/doris-meta/:/opt/apache-doris/fe/doris-meta
+      - /data/apache-doris/fe2/log/:/opt/apache-doris/fe/log
+      # - ./fe.conf:/opt/apache-doris/fe/conf/fe.conf
+    environment:
+      - FE_SERVERS=fe1:173.21.80.2:9010,fe2:173.21.80.3:9010,fe3:173.21.80.4:9010
+      - FE_ID=2
+      - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
+    restart: on-failure
+    ports:
+      - "8032:8030"
+      - "9032:9030"
+    networks:
+      doris_net:
+      # 173.21.80.1 提示address is in use
+        ipv4_address: 173.21.80.3      
+  fe3:
+    image: apache-doris:2.0.2-fe-hxf
+    volumes:
+      - /data/apache-doris/fe3/doris-meta/:/opt/apache-doris/fe/doris-meta
+      - /data/apache-doris/fe3/log/:/opt/apache-doris/fe/log
+      # - ./fe.conf:/opt/apache-doris/fe/conf/fe.conf
+    environment:
+      - FE_SERVERS=fe1:173.21.80.2:9010,fe2:173.21.80.3:9010,fe3:173.21.80.4:9010
+      - FE_ID=3
+      - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
+    restart: on-failure
+    ports:
+      - "8033:8030"
+      - "9033:9030"
+    networks:
+      doris_net:
+      # 173.21.80.1 提示address is in use
+        ipv4_address: 173.21.80.4             
+
+
+  be1:
+    image: apache-doris:2.0.2-be-hxf
+    ulimits:
+      nproc: 2000000
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /data/apache-doris/be1/storage/:/opt/apache-doris/be/storage
+      - /data/apache-doris/be1/log/:/opt/apache-doris/be/log
+    environment:
+      - FE_SERVERS=fe1:173.21.80.2:9010,fe2:173.21.80.3:9010,fe3:173.21.80.4:9010
+      - BE_ADDR=173.21.80.5:9050
+      - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
+    depends_on:
+      - fe1
+      - fe2
+      - fe3
+    ports:
+      - 8041:8040  
+    restart: on-failure
+    networks:
+      doris_net:
+        ipv4_address: 173.21.80.5
+  be2:
+    image: apache-doris:2.0.2-be-hxf
+    ulimits:
+      nproc: 2000000
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /data/apache-doris/be2/storage/:/opt/apache-doris/be/storage
+      - /data/apache-doris/be2/log/:/opt/apache-doris/be/log
+    environment:
+      - FE_SERVERS=fe1:173.21.80.2:9010,fe2:173.21.80.3:9010,fe3:173.21.80.4:9010
+      - BE_ADDR=173.21.80.6:9050
+      - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
+    depends_on:
+      - fe1
+      - fe2
+      - fe3
+    ports:
+      - 8042:8040  
+    restart: on-failure
+    networks:
+      doris_net:
+        ipv4_address: 173.21.80.6
+  be3:
+    image: apache-doris:2.0.2-be-hxf
+    ulimits:
+      nproc: 2000000
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - /data/apache-doris/be3/storage/:/opt/apache-doris/be/storage
+      - /data/apache-doris/be3/log/:/opt/apache-doris/be/log
+    environment:
+      - FE_SERVERS=fe1:173.21.80.2:9010,fe2:173.21.80.3:9010,fe3:173.21.80.4:9010
+      - BE_ADDR=173.21.80.7:9050
+      - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
+    depends_on:
+      - fe1
+      - fe2
+      - fe3
+    ports:
+      - 8043:8040  
+    restart: on-failure
+    networks:
+      doris_net:
+        ipv4_address: 173.21.80.7                
+  
+networks:
+  doris_net:
+    ipam:
+      config:
+        - subnet: 173.21.80.0/24

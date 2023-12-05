@@ -61,13 +61,13 @@ services:
   #     - JOB_MANAGER_RPC_ADDRESS=jobmanager
 
   fe:
-    image: apache-doris:2.0.0-fe-hxf
+    image: apache-doris:2.0.2-fe-hxf
     volumes:
       - /data/apache-doris/fe/doris-meta/:/opt/apache-doris/fe/doris-meta
       - /data/apache-doris/fe/log/:/opt/apache-doris/fe/log
       - ./fe.conf:/opt/apache-doris/fe/conf/fe.conf
     environment:
-      - FE_SERVERS=fe1:172.20.80.2:9010
+      - FE_SERVERS=fe1:173.21.80.2:9010
       - FE_ID=1
       - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
     restart: on-failure
@@ -76,8 +76,8 @@ services:
       - "9030:9030"
     networks:
       doris_net:
-      # 172.20.80.1 提示address is in use
-        ipv4_address: 172.20.80.2
+      # 173.21.80.1 提示address is in use
+        ipv4_address: 173.21.80.2
   zookeeper:
    image: 'bitnami/zookeeper:3.4.12-r68'
    hostname: zookeeper
@@ -88,7 +88,7 @@ services:
      - ALLOW_ANONYMOUS_LOGIN=yes
    networks:
       doris_net:
-        ipv4_address: 172.20.80.4
+        ipv4_address: 173.21.80.4
 
   kafka:
    image: 'bitnami/kafka:2.0.0'
@@ -101,9 +101,9 @@ services:
      - ALLOW_PLAINTEXT_LISTENER=yes
    networks:
       doris_net:
-        ipv4_address: 172.20.80.5
+        ipv4_address: 173.21.80.5
   be:
-    image: apache-doris:2.0.0-be-hxf
+    image: apache-doris:2.0.2-be-hxf
     ulimits:
       nproc: 2000000
       nofile:
@@ -113,15 +113,15 @@ services:
       - /data/apache-doris/be/storage/:/opt/apache-doris/be/storage
       - /data/apache-doris/be/log/:/opt/apache-doris/be/log
     environment:
-      - FE_SERVERS=fe1:172.20.80.2:9010
-      - BE_ADDR=172.20.80.3:9050
+      - FE_SERVERS=fe1:173.21.80.2:9010
+      - BE_ADDR=173.21.80.3:9050
       - TZ=Asia/Shanghai # 时区配置亚洲上海，解决了容器的时区问题！！！
     depends_on:
       - fe
     restart: on-failure
     networks:
       doris_net:
-        ipv4_address: 172.20.80.3
+        ipv4_address: 173.21.80.3
   doris--minio:
     image: minio/minio
     container_name: doris--minio
@@ -135,7 +135,7 @@ services:
       - 9000:9000
     networks:
       doris_net:
-        ipv4_address: 172.20.80.6
+        ipv4_address: 173.21.80.6
     command: ["server", "/data", "--console-address", ":9001"]
   doris--mc:
     depends_on:
@@ -148,7 +148,7 @@ services:
       - AWS_REGION=xian
     networks:
       doris_net:
-        ipv4_address: 172.20.80.7
+        ipv4_address: 173.21.80.7
     entrypoint: >
       /bin/sh -c "
       until (/usr/bin/mc config host add minio http://doris--minio:9000 admin password) do echo '...waiting...' && sleep 1; done;
@@ -168,4 +168,4 @@ networks:
   doris_net:
     ipam:
       config:
-        - subnet: 172.20.80.0/24
+        - subnet: 173.21.80.0/24
