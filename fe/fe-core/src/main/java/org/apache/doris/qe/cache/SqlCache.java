@@ -55,13 +55,22 @@ public class SqlCache extends Cache {
         return cacheKey;
     }
 
+    public long getLatestTime() {
+        return latestTable.latestTime;
+    }
+
+    public long getSumOfPartitionNum() {
+        return latestTable.sumOfPartitionNum;
+    }
+
     public InternalService.PFetchCacheResult getCacheData(Status status) {
         InternalService.PFetchCacheRequest request = InternalService.PFetchCacheRequest.newBuilder()
                 .setSqlKey(CacheProxy.getMd5(getSqlWithViewStmt()))
                 .addParams(InternalService.PCacheParam.newBuilder()
                         .setPartitionKey(latestTable.latestPartitionId)
                         .setLastVersion(latestTable.latestVersion)
-                        .setLastVersionTime(latestTable.latestTime))
+                        .setLastVersionTime(latestTable.latestTime)
+                        .setPartitionNum(latestTable.sumOfPartitionNum))
                 .build();
 
         InternalService.PFetchCacheResult cacheResult = proxy.fetchCache(request, 10000, status);
@@ -94,7 +103,7 @@ public class SqlCache extends Cache {
 
         InternalService.PUpdateCacheRequest updateRequest =
                 rowBatchBuilder.buildSqlUpdateRequest(getSqlWithViewStmt(), latestTable.latestPartitionId,
-                        latestTable.latestVersion, latestTable.latestTime);
+                        latestTable.latestVersion, latestTable.latestTime, latestTable.sumOfPartitionNum);
         if (updateRequest.getValuesCount() > 0) {
             CacheBeProxy proxy = new CacheBeProxy();
             Status status = new Status();
@@ -112,3 +121,4 @@ public class SqlCache extends Cache {
         }
     }
 }
+

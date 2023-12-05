@@ -39,11 +39,9 @@ import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -205,24 +203,22 @@ public class StatisticsCache {
                 LOG.warn("Error when preheating stats cache", t);
             }
         }
-        try {
-            loadPartStats(keyToColStats);
-        } catch (Exception e) {
-            LOG.warn("Fucka", e);
-        }
     }
 
-    public void syncLoadColStats(long tableId, long idxId, String colName) {
+    /**
+     * Return false if the log of corresponding stats load is failed.
+     */
+    public boolean syncLoadColStats(long tableId, long idxId, String colName) {
         List<ResultRow> columnResults = StatisticsRepository.loadColStats(tableId, idxId, colName);
         final StatisticsCacheKey k =
                 new StatisticsCacheKey(tableId, idxId, colName);
         final ColumnStatistic c = ColumnStatistic.fromResultRow(columnResults);
         if (c == ColumnStatistic.UNKNOWN) {
-            return;
+            return false;
         }
         putCache(k, c);
         if (ColumnStatistic.UNKNOWN == c) {
-            return;
+            return false;
         }
         TUpdateFollowerStatsCacheRequest updateFollowerStatsCacheRequest = new TUpdateFollowerStatsCacheRequest();
         updateFollowerStatsCacheRequest.key = GsonUtils.GSON.toJson(k);
@@ -234,6 +230,7 @@ public class StatisticsCache {
             }
             sendStats(frontend, updateFollowerStatsCacheRequest);
         }
+        return true;
     }
 
     @VisibleForTesting
@@ -258,40 +255,4 @@ public class StatisticsCache {
         f.obtrudeValue(Optional.of(c));
         columnStatisticsCache.put(k, f);
     }
-
-    private void loadPartStats(Map<StatisticsCacheKey, ColumnStatistic> keyToColStats) {
-        final int batchSize = Config.expr_children_limit;
-        Set<StatisticsCacheKey> keySet = new HashSet<>();
-        for (StatisticsCacheKey statisticsCacheKey : keyToColStats.keySet()) {
-            if (keySet.size() < batchSize - 1) {
-                keySet.add(statisticsCacheKey);
-            } else {
-                List<ResultRow> partStats = StatisticsRepository.loadPartStats(keySet);
-                addPartStatsToColStats(keyToColStats, partStats);
-                keySet = new HashSet<>();
-            }
-        }
-        if (!keySet.isEmpty()) {
-            List<ResultRow> partStats = StatisticsRepository.loadPartStats(keySet);
-            addPartStatsToColStats(keyToColStats, partStats);
-        }
-    }
-
-    private void addPartStatsToColStats(Map<StatisticsCacheKey, ColumnStatistic> keyToColStats,
-            List<ResultRow> partsStats) {
-        for (ResultRow r : partsStats) {
-            try {
-                StatsId statsId = new StatsId(r);
-                long tblId = statsId.tblId;
-                long idxId = statsId.idxId;
-                long partId = statsId.partId;
-                String colId = statsId.colId;
-                ColumnStatistic partStats = ColumnStatistic.fromResultRow(r);
-                keyToColStats.get(new StatisticsCacheKey(tblId, idxId, colId)).putPartStats(partId, partStats);
-            } catch (Throwable t) {
-                LOG.warn("Failed to deserialized part stats", t);
-            }
-        }
-    }
-
 }

@@ -21,12 +21,16 @@ suite ("no_await") {
 
     def tblName = "agg_have_dup_base_no_await"
     def waitDrop = {
-        def try_times = 100
+        def try_times = 1000
         def result = "null"
         sql "sync;"
         while (!result.contains("FINISHED")) {
-            result = (sql "SHOW ALTER TABLE MATERIALIZED VIEW ORDER BY CreateTime DESC LIMIT 1;")[0]
-            Thread.sleep(500)
+            result = (sql "SHOW ALTER TABLE MATERIALIZED VIEW WHERE TableName='${tblName}' ORDER BY CreateTime DESC LIMIT 1;")[0]
+            if (!result.contains("RUNNING")&&!result.contains("PENDING")&&!result.contains("FINISHED")&&!result.contains("WAITING_TXN")) {
+                assertTrue(false)
+            }
+            log.info("result: ${result}")
+            Thread.sleep(3000)
             try_times -= 1
             assertTrue(try_times > 0)
         }

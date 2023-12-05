@@ -17,6 +17,7 @@
 
 package org.apache.doris.datasource;
 
+import org.apache.doris.analysis.AlterCatalogCommentStmt;
 import org.apache.doris.analysis.AlterCatalogNameStmt;
 import org.apache.doris.analysis.AlterCatalogPropertyStmt;
 import org.apache.doris.analysis.CreateCatalogStmt;
@@ -27,7 +28,6 @@ import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.Resource;
 import org.apache.doris.common.DdlException;
 import org.apache.doris.common.FeConstants;
-import org.apache.doris.datasource.deltalake.DeltaLakeExternalCatalog;
 import org.apache.doris.datasource.iceberg.IcebergExternalCatalogFactory;
 import org.apache.doris.datasource.jdbc.JdbcExternalCatalog;
 import org.apache.doris.datasource.paimon.PaimonExternalCatalogFactory;
@@ -55,16 +55,15 @@ public class CatalogFactory {
         } else if (stmt instanceof AlterCatalogPropertyStmt) {
             log.setCatalogId(catalogId);
             log.setNewProps(((AlterCatalogPropertyStmt) stmt).getNewProperties());
-            String newComment = ((AlterCatalogPropertyStmt) stmt).getComment();
-            if (!Strings.isNullOrEmpty(newComment)) {
-                log.setComment(newComment);
-            }
         } else if (stmt instanceof AlterCatalogNameStmt) {
             log.setCatalogId(catalogId);
             log.setNewCatalogName(((AlterCatalogNameStmt) stmt).getNewCatalogName());
         } else if (stmt instanceof RefreshCatalogStmt) {
             log.setCatalogId(catalogId);
             log.setInvalidCache(((RefreshCatalogStmt) stmt).isInvalidCache());
+        } else if (stmt instanceof AlterCatalogCommentStmt) {
+            log.setCatalogId(catalogId);
+            log.setComment(((AlterCatalogCommentStmt) stmt).getComment());
         } else {
             throw new RuntimeException("Unknown stmt for catalog manager " + stmt.getClass().getSimpleName());
         }
@@ -131,9 +130,6 @@ public class CatalogFactory {
             case "max_compute":
                 catalog = new MaxComputeExternalCatalog(catalogId, name, resource, props, comment);
                 break;
-            case "deltalake":
-                catalog = new DeltaLakeExternalCatalog(catalogId, name, resource, props, comment);
-                break;
             case "test":
                 if (!FeConstants.runningUnitTest) {
                     throw new DdlException("test catalog is only for FE unit test");
@@ -146,7 +142,15 @@ public class CatalogFactory {
         if (!isReplay) {
             // set some default properties when creating catalog.
             // do not call this method when replaying edit log. Because we need to keey the original properties.
-            catalog.setDefaultProps();
+            catalog.setDefaultPropsWhenCreating(isReplay);
+            // This will check if the customized access controller can be created successfully.
+            // If failed, it will throw exception and the catalog will not be created.
+            try {
+                catalog.initAccessController(true);
+            } catch (Exception e) {
+                LOG.warn("Failed to init access controller", e);
+                throw new DdlException("Failed to init access controller: " + e.getMessage());
+            }
         }
         return catalog;
     }

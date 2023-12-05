@@ -26,7 +26,8 @@
 #include <vector>
 
 #include "common/status.h"
-#include "exec/operator.h"
+#include "pipeline/exec/operator.h"
+#include "pipeline/pipeline_x/operator.h"
 #include "util/runtime_profile.h"
 
 namespace doris {
@@ -45,31 +46,52 @@ using PipelineId = uint32_t;
 
 class Pipeline : public std::enable_shared_from_this<Pipeline> {
     friend class PipelineTask;
+    friend class PipelineXTask;
 
 public:
     Pipeline() = delete;
     explicit Pipeline(PipelineId pipeline_id, std::weak_ptr<PipelineFragmentContext> context)
-            : _complete_dependency(0), _pipeline_id(pipeline_id), _context(context) {
+            : _pipeline_id(pipeline_id), _context(context) {
         _init_profile();
     }
 
     void add_dependency(std::shared_ptr<Pipeline>& pipeline) {
-        pipeline->_parents.push_back(weak_from_this());
-        _dependencies.push_back(pipeline);
+        pipeline->_parents.push_back({_operator_builders.size(), weak_from_this()});
+        _dependencies.push_back({_operator_builders.size(), pipeline});
     }
 
     // If all dependencies are finished, this pipeline task should be scheduled.
     // e.g. Hash join probe task will be scheduled once Hash join build task is finished.
-    bool finish_one_dependency(int dependency_core_id) {
-        DCHECK(_complete_dependency < _dependencies.size());
-        bool finish = _complete_dependency.fetch_add(1) == _dependencies.size() - 1;
-        if (finish) {
+    void finish_one_dependency(int dep_opr, int dependency_core_id) {
+        std::lock_guard l(_depend_mutex);
+        if (!_operators.empty() && _operators[dep_opr - 1]->can_terminate_early()) {
+            _always_can_read = true;
+            _always_can_write = (dep_opr == _operators.size());
+
+            for (int i = 0; i < _dependencies.size(); ++i) {
+                if (dep_opr == _dependencies[i].first) {
+                    _dependencies.erase(_dependencies.begin(), _dependencies.begin() + i + 1);
+                    break;
+                }
+            }
+        } else {
+            for (int i = 0; i < _dependencies.size(); ++i) {
+                if (dep_opr == _dependencies[i].first) {
+                    _dependencies.erase(_dependencies.begin() + i);
+                    break;
+                }
+            }
+        }
+
+        if (_dependencies.empty()) {
             _previous_schedule_id = dependency_core_id;
         }
-        return finish;
     }
 
-    bool has_dependency() { return _complete_dependency.load() < _dependencies.size(); }
+    bool has_dependency() {
+        std::lock_guard l(_depend_mutex);
+        return !_dependencies.empty();
+    }
 
     Status add_operator(OperatorBuilderPtr& op);
 
@@ -82,29 +104,51 @@ public:
     Status set_sink(DataSinkOperatorXPtr& sink_operator);
 
     OperatorBuilderBase* sink() { return _sink.get(); }
-    DataSinkOperatorX* sink_x() { return _sink_x.get(); }
-    OperatorXs& operator_xs() { return _operators; }
+    DataSinkOperatorXBase* sink_x() { return _sink_x.get(); }
+    OperatorXs& operator_xs() { return operatorXs; }
     DataSinkOperatorXPtr sink_shared_pointer() { return _sink_x; }
 
-    Status build_operators(Operators&);
+    Status build_operators();
 
     RuntimeProfile* pipeline_profile() { return _pipeline_profile.get(); }
 
-    const RowDescriptor& output_row_desc() const {
-        return _operators[_operators.size() - 1]->row_desc();
+    [[nodiscard]] const RowDescriptor& output_row_desc() const {
+        return operatorXs.back()->row_desc();
     }
 
-    PipelineId id() const { return _pipeline_id; }
+    [[nodiscard]] PipelineId id() const { return _pipeline_id; }
+    void set_is_root_pipeline() { _is_root_pipeline = true; }
+    bool is_root_pipeline() const { return _is_root_pipeline; }
+    void set_collect_query_statistics_with_every_batch() {
+        _collect_query_statistics_with_every_batch = true;
+    }
+    [[nodiscard]] bool collect_query_statistics_with_every_batch() const {
+        return _collect_query_statistics_with_every_batch;
+    }
+
+    bool need_to_local_shuffle() const { return _need_to_local_shuffle; }
+    void set_need_to_local_shuffle(bool need_to_local_shuffle) {
+        _need_to_local_shuffle = need_to_local_shuffle;
+    }
+    void init_need_to_local_shuffle_by_source() {
+        set_need_to_local_shuffle(operatorXs.front()->need_to_local_shuffle());
+    }
+
+    std::vector<std::shared_ptr<Pipeline>>& children() { return _children; }
+    void set_children(std::shared_ptr<Pipeline> child) { _children.push_back(child); }
+    void set_children(std::vector<std::shared_ptr<Pipeline>> children) { _children = children; }
 
 private:
     void _init_profile();
-    std::atomic<uint32_t> _complete_dependency;
 
     OperatorBuilders _operator_builders; // left is _source, right is _root
     OperatorBuilderPtr _sink;            // put block to sink
 
-    std::vector<std::weak_ptr<Pipeline>> _parents;
-    std::vector<std::shared_ptr<Pipeline>> _dependencies;
+    std::mutex _depend_mutex;
+    std::vector<std::pair<int, std::weak_ptr<Pipeline>>> _parents;
+    std::vector<std::pair<int, std::shared_ptr<Pipeline>>> _dependencies;
+
+    std::vector<std::shared_ptr<Pipeline>> _children;
 
     PipelineId _pipeline_id;
     std::weak_ptr<PipelineFragmentContext> _context;
@@ -114,10 +158,47 @@ private:
 
     // Operators for pipelineX. All pipeline tasks share operators from this.
     // [SourceOperator -> ... -> SinkOperator]
-    OperatorXs _operators;
-    DataSinkOperatorXPtr _sink_x;
+    OperatorXs operatorXs;
+    DataSinkOperatorXPtr _sink_x = nullptr;
 
     std::shared_ptr<ObjectPool> _obj_pool;
+
+    Operators _operators;
+    /**
+     * Consider the query plan below:
+     *
+     *      ExchangeSource     JoinBuild1
+     *            \              /
+     *         JoinProbe1 (Right Outer)    JoinBuild2
+     *                   \                   /
+     *                 JoinProbe2 (Right Outer)
+     *                          |
+     *                        Sink
+     *
+     * Assume JoinBuild1/JoinBuild2 outputs 0 rows, this pipeline task should not be blocked by ExchangeSource
+     * because we have a determined conclusion that JoinProbe1/JoinProbe2 will also output 0 rows.
+     *
+     * Assume JoinBuild2 outputs > 0 rows, this pipeline task may be blocked by Sink because JoinProbe2 will
+     * produce more data.
+     *
+     * Assume both JoinBuild2 outputs 0 rows this pipeline task should not be blocked by ExchangeSource
+     * and Sink because JoinProbe2 will always produce 0 rows and terminate early.
+     *
+     * In a nutshell, we should follow the rules:
+     * 1. if any operator in pipeline can terminate early, this task should never be blocked by source operator.
+     * 2. if the last operator (except sink) can terminate early, this task should never be blocked by sink operator.
+     */
+    bool _always_can_read = false;
+    bool _always_can_write = false;
+    bool _is_root_pipeline = false;
+    bool _collect_query_statistics_with_every_batch = false;
+
+    // If source operator meets one of all conditions below:
+    // 1. is scan operator with Hash Bucket
+    // 2. is exchange operator with Hash/BucketHash partition
+    // then set `_need_to_local_shuffle` to false which means we should use local shuffle in this fragment
+    // because data already be partitioned by storage/shuffling.
+    bool _need_to_local_shuffle = true;
 };
 
 } // namespace doris::pipeline

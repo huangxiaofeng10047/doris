@@ -20,7 +20,6 @@
 #include <gen_cpp/Exprs_types.h>
 #include <gen_cpp/Metrics_types.h>
 #include <gen_cpp/PlanNodes_types.h>
-#include <opentelemetry/nostd/shared_ptr.h>
 
 #include <atomic>
 #include <functional>
@@ -35,7 +34,6 @@
 #include "runtime/runtime_predicate.h"
 #include "runtime/runtime_state.h"
 #include "runtime/types.h"
-#include "util/telemetry/telemetry.h"
 #include "vec/common/sort/heap_sorter.h"
 #include "vec/common/sort/topn_sorter.h"
 #include "vec/core/block.h"
@@ -113,6 +111,7 @@ Status VSortNode::init(const TPlanNode& tnode, RuntimeState* state) {
 Status VSortNode::prepare(RuntimeState* state) {
     SCOPED_TIMER(_runtime_profile->total_time_counter());
     RETURN_IF_ERROR(ExecNode::prepare(state));
+    SCOPED_TIMER(_exec_timer);
     _runtime_profile->add_info_string("TOP-N", _limit == -1 ? "false" : "true");
 
     _memory_usage_counter = ADD_LABEL_COUNTER(runtime_profile(), "MemoryUsage");
@@ -127,6 +126,7 @@ Status VSortNode::prepare(RuntimeState* state) {
 }
 
 Status VSortNode::alloc_resource(doris::RuntimeState* state) {
+    SCOPED_TIMER(_exec_timer);
     RETURN_IF_ERROR(ExecNode::alloc_resource(state));
     RETURN_IF_ERROR(_vsort_exec_exprs.open(state));
     RETURN_IF_CANCELLED(state);
@@ -136,6 +136,7 @@ Status VSortNode::alloc_resource(doris::RuntimeState* state) {
 }
 
 Status VSortNode::sink(RuntimeState* state, vectorized::Block* input_block, bool eos) {
+    SCOPED_TIMER(_exec_timer);
     if (input_block->rows() > 0) {
         RETURN_IF_ERROR(_sorter->append_block(input_block));
         RETURN_IF_CANCELLED(state);
@@ -144,7 +145,7 @@ Status VSortNode::sink(RuntimeState* state, vectorized::Block* input_block, bool
         // update runtime predicate
         if (_use_topn_opt) {
             Field new_top = _sorter->get_top_value();
-            if (!new_top.is_null() && new_top != old_top) {
+            if (!new_top.is_null() && (old_top.is_null() || new_top != old_top)) {
                 auto& sort_description = _sorter->get_sort_description();
                 auto col = input_block->get_by_position(sort_description[0].column_number);
                 bool is_reverse = sort_description[0].direction < 0;
@@ -192,7 +193,7 @@ Status VSortNode::open(RuntimeState* state) {
 
     } while (!eos);
 
-    child(0)->close(state);
+    static_cast<void>(child(0)->close(state));
 
     mem_tracker()->consume(_sorter->data_size());
     COUNTER_UPDATE(_sort_blocks_memory_usage, _sorter->data_size());
@@ -201,6 +202,7 @@ Status VSortNode::open(RuntimeState* state) {
 }
 
 Status VSortNode::pull(doris::RuntimeState* state, vectorized::Block* output_block, bool* eos) {
+    SCOPED_TIMER(_exec_timer);
     SCOPED_TIMER(_get_next_timer);
     RETURN_IF_ERROR_OR_CATCH_EXCEPTION(_sorter->get_next(state, output_block, eos));
     reached_limit(output_block, eos);

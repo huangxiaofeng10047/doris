@@ -18,8 +18,10 @@
 package org.apache.doris.journal.bdbje;
 
 import org.apache.doris.catalog.Env;
+import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.io.DataOutputBuffer;
 import org.apache.doris.common.io.Writable;
+import org.apache.doris.common.util.NetUtils;
 import org.apache.doris.common.util.Util;
 import org.apache.doris.journal.Journal;
 import org.apache.doris.journal.JournalCursor;
@@ -35,9 +37,12 @@ import com.sleepycat.je.DatabaseException;
 import com.sleepycat.je.DatabaseNotFoundException;
 import com.sleepycat.je.LockMode;
 import com.sleepycat.je.OperationStatus;
+import com.sleepycat.je.StatsConfig;
 import com.sleepycat.je.rep.InsufficientLogException;
 import com.sleepycat.je.rep.NetworkRestore;
 import com.sleepycat.je.rep.NetworkRestoreConfig;
+import com.sleepycat.je.rep.ReplicaWriteException;
+import com.sleepycat.je.rep.ReplicatedEnvironment;
 import com.sleepycat.je.rep.RollbackException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -71,14 +76,6 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
     private AtomicLong nextJournalId = new AtomicLong(1);
 
     public BDBJEJournal(String nodeName) {
-        initBDBEnv(nodeName);
-    }
-
-    /*
-     * Initialize bdb environment.
-     * node name is ip_port (the port is edit_log_port)
-     */
-    private void initBDBEnv(String nodeName) {
         environmentPath = Env.getServingEnv().getBdbDir();
         HostInfo selfNode = Env.getServingEnv().getSelfNode();
         selfNodeName = nodeName;
@@ -86,7 +83,7 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
         // so that we do not need to update bdbje when the IP changes.
         // WARNING:However, it is necessary to ensure that the hostname of the node
         // can be resolved and accessed by other nodes.
-        selfNodeHostPort = selfNode.getHost() + ":" + selfNode.getPort();
+        selfNodeHostPort = NetUtils.getHostPortInAccessibleFormat(selfNode.getHost(), selfNode.getPort());
     }
 
     /*
@@ -107,7 +104,7 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
         long currentName = Long.parseLong(currentDbName);
         long newNameVerify = currentName + currentJournalDB.count();
         if (newName == newNameVerify) {
-            LOG.info("roll edit log. new db name is {}", newName);
+            LOG.info("roll edit log. new dbName: {}, old dbName:{}", newName, currentDbName);
             currentJournalDB = bdbEnvironment.openDatabase(Long.toString(newName));
         } else {
             String msg = String.format("roll journal error! journalId and db journal numbers is not match. "
@@ -155,6 +152,26 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
                     }
                     break;
                 }
+            } catch (ReplicaWriteException e) {
+                /**
+                 * This exception indicates that an update operation or transaction commit
+                 * or abort was attempted while in the
+                 * {@link ReplicatedEnvironment.State#REPLICA} state. The transaction is marked
+                 * as being invalid.
+                 * <p>
+                 * The exception is the result of either an error in the application logic or
+                 * the result of a transition of the node from Master to Replica while a
+                 * transaction was in progress.
+                 * <p>
+                 * The application must abort the current transaction and redirect all
+                 * subsequent update operations to the Master.
+                 */
+                LOG.error("catch ReplicaWriteException when writing to database, will exit. journal id {}", id, e);
+                String msg = "write bdb failed. will exit. journalId: " + id + ", bdb database Name: "
+                        + currentJournalDB.getDatabaseName();
+                LOG.error(msg);
+                Util.stdoutWithTime(msg);
+                System.exit(-1);
             } catch (DatabaseException e) {
                 LOG.error("catch an exception when writing to database. sleep and retry. journal id {}", id, e);
                 try {
@@ -303,16 +320,17 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
     public synchronized void open() {
         if (bdbEnvironment == null) {
             File dbEnv = new File(environmentPath);
-            bdbEnvironment = new BDBEnvironment();
+
+            boolean metadataFailureRecovery = null != System.getProperty(FeConstants.METADATA_FAILURE_RECOVERY_KEY);
+            bdbEnvironment = new BDBEnvironment(Env.getServingEnv().isElectable(), metadataFailureRecovery);
 
             HostInfo helperNode = Env.getServingEnv().getHelperNode();
-            String helperHostPort = helperNode.getHost() + ":" + helperNode.getPort();
+            String helperHostPort = NetUtils.getHostPortInAccessibleFormat(helperNode.getHost(), helperNode.getPort());
             try {
-                bdbEnvironment.setup(dbEnv, selfNodeName, selfNodeHostPort, helperHostPort,
-                        Env.getServingEnv().isElectable());
+                bdbEnvironment.setup(dbEnv, selfNodeName, selfNodeHostPort, helperHostPort);
             } catch (Exception e) {
                 if (e instanceof DatabaseNotFoundException) {
-                    LOG.error("It is not allowed to set metadata_failure_recovery to true "
+                    LOG.error("It is not allowed to set metadata_failure_recovery"
                             + "when meta dir or bdbje dir is empty， which may mean it is "
                             + "the first time to start this node");
                 }
@@ -356,7 +374,7 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
                 reSetupBdbEnvironment(insufficientLogEx);
             } catch (RollbackException rollbackEx) {
                 LOG.warn("catch rollback log exception. will reopen the ReplicatedEnvironment.", rollbackEx);
-                bdbEnvironment.closeReplicatedEnvironment();
+                bdbEnvironment.close();
                 bdbEnvironment.openReplicatedEnvironment(new File(environmentPath));
             }
         }
@@ -390,7 +408,7 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
 
         bdbEnvironment.close();
         bdbEnvironment.setup(new File(environmentPath), selfNodeName, selfNodeHostPort,
-                helperNode.getHost() + ":" + helperNode.getPort(), Env.getServingEnv().isElectable());
+                NetUtils.getHostPortInAccessibleFormat(helperNode.getHost(), helperNode.getPort()));
     }
 
     @Override
@@ -481,7 +499,7 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
             } catch (RollbackException rollbackEx) {
                 if (!Env.isCheckpointThread()) {
                     LOG.warn("catch rollback log exception. will reopen the ReplicatedEnvironment.", rollbackEx);
-                    bdbEnvironment.closeReplicatedEnvironment();
+                    bdbEnvironment.close();
                     bdbEnvironment.openReplicatedEnvironment(new File(environmentPath));
                 } else {
                     throw rollbackEx;
@@ -494,5 +512,18 @@ public class BDBJEJournal implements Journal { // CHECKSTYLE IGNORE THIS LINE: B
 
     public BDBEnvironment getBDBEnvironment() {
         return this.bdbEnvironment;
+    }
+
+    public String getBDBStats() {
+        if (bdbEnvironment == null) {
+            return "";
+        }
+
+        ReplicatedEnvironment repEnv = bdbEnvironment.getReplicatedEnvironment();
+        if (repEnv == null) {
+            return "";
+        }
+
+        return repEnv.getRepStats(StatsConfig.DEFAULT).toString();
     }
 }

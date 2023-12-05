@@ -120,7 +120,16 @@ public class PolicyMgr implements Writable {
         Policy policy = Policy.fromCreateStmt(stmt);
         writeLock();
         try {
-            if (existPolicy(policy)) {
+            boolean storagePolicyExists = false;
+            if (PolicyTypeEnum.STORAGE == policy.getType()) {
+                // The name of the storage policy remains globally unique until it is renamed by user.
+                // So we could just compare the policy name to check if there are redundant ones.
+                // Otherwise two storage policy share one same name but with different resource name
+                // will not be filtered. See github #25025 for more details.
+                storagePolicyExists = getPoliciesByType(PolicyTypeEnum.STORAGE)
+                        .stream().anyMatch(p -> p.getPolicyName().equals(policy.getPolicyName()));
+            }
+            if (storagePolicyExists || existPolicy(policy)) {
                 if (stmt.isIfNotExists()) {
                     return;
                 }
@@ -532,5 +541,16 @@ public class PolicyMgr implements Writable {
         } finally {
             readUnlock();
         }
+    }
+
+    public boolean checkStoragePolicyIfSameResource(String policyName, String anotherPolicyName) {
+        Optional<Policy> policy = findPolicy(policyName, PolicyTypeEnum.STORAGE);
+        Optional<Policy> policy1 = findPolicy(anotherPolicyName, PolicyTypeEnum.STORAGE);
+        if (policy1.isPresent() && policy.isPresent()) {
+            StoragePolicy storagePolicy = (StoragePolicy) policy.get();
+            StoragePolicy storagePolicy1 = (StoragePolicy) policy1.get();
+            return storagePolicy1.getStorageResource().equals(storagePolicy.getStorageResource());
+        }
+        return false;
     }
 }

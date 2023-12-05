@@ -65,9 +65,12 @@ public class PolicyTest extends TestWithFeService {
         createTable("create table table2\n"
                 + "(k1 int, k2 int) distributed by hash(k1) buckets 1\n"
                 + "properties(\"replication_num\" = \"1\");");
+        createTable("create table table3\n"
+                + "(k1 int, k2 int) unique KEY(`k1`) distributed by hash(k1) buckets 1\n"
+                + "properties(\"replication_num\" = \"1\");");
         // create user
         UserIdentity user = new UserIdentity("test_policy", "%");
-        user.analyze(SystemInfoService.DEFAULT_CLUSTER);
+        user.analyze();
         CreateUserStmt createUserStmt = new CreateUserStmt(new UserDesc(user));
         Env.getCurrentEnv().getAuth().createUser(createUserStmt);
         List<AccessPrivilegeWithCols> privileges = Lists
@@ -130,6 +133,26 @@ public class PolicyTest extends TestWithFeService {
         explainString = getSQLPlanOrErrorMsg(queryStr);
         Assertions.assertTrue(explainString.contains("k1[#0] = 2"));
         dropPolicy("DROP ROW POLICY test_row_policy");
+    }
+
+    @Test
+    public void testUniqueTable() throws Exception {
+        // test user
+        createPolicy("CREATE ROW POLICY test_unique_policy ON test.table3 AS PERMISSIVE TO test_policy USING (k1 = 1)");
+        String queryStr = "EXPLAIN select /*+ SET_VAR(enable_nereids_planner=false) */ * from test.table3";
+        String explainString = getSQLPlanOrErrorMsg(queryStr);
+        Assertions.assertTrue(explainString.contains("`k1` = 1"));
+        dropPolicy("DROP ROW POLICY test_unique_policy");
+    }
+
+    @Test
+    public void testUniqueTableNereidsPlanners() throws Exception {
+        // test user
+        createPolicy("CREATE ROW POLICY test_unique_policy ON test.table3 AS PERMISSIVE TO test_policy USING (k1 = 1)");
+        String queryStr = "EXPLAIN select * from test.table3";
+        String explainString = getSQLPlanOrErrorMsg(queryStr);
+        Assertions.assertTrue(explainString.contains("k1[#0] = 1"));
+        dropPolicy("DROP ROW POLICY test_unique_policy");
     }
 
     @Test
@@ -309,7 +332,7 @@ public class PolicyTest extends TestWithFeService {
         String policyName = "policy_name";
         long dbId = 10;
         UserIdentity user = new UserIdentity("test_policy", "%");
-        user.analyze(SystemInfoService.DEFAULT_CLUSTER);
+        user.analyze();
         String originStmt = "CREATE ROW POLICY test_row_policy ON test.table1"
                 + " AS PERMISSIVE TO test_policy USING (k1 = 1)";
         long tableId = 100;
@@ -332,8 +355,8 @@ public class PolicyTest extends TestWithFeService {
         Assertions.assertEquals(type, newRowPolicy.getType());
         Assertions.assertEquals(policyName, newRowPolicy.getPolicyName());
         Assertions.assertEquals(dbId, newRowPolicy.getDbId());
-        user.analyze(SystemInfoService.DEFAULT_CLUSTER);
-        newRowPolicy.getUser().analyze(SystemInfoService.DEFAULT_CLUSTER);
+        user.analyze();
+        newRowPolicy.getUser().analyze();
         Assertions.assertEquals(user.getQualifiedUser(), newRowPolicy.getUser().getQualifiedUser());
         Assertions.assertEquals(originStmt, newRowPolicy.getOriginStmt());
         Assertions.assertEquals(tableId, newRowPolicy.getTableId());

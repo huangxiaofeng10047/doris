@@ -55,9 +55,111 @@
 namespace doris {
 class RowDescriptor;
 class RuntimeState;
+TExprNode create_texpr_node_from(const void* data, const PrimitiveType& type, int precision,
+                                 int scale) {
+    TExprNode node;
+
+    switch (type) {
+    case TYPE_BOOLEAN: {
+        static_cast<void>(create_texpr_literal_node<TYPE_BOOLEAN>(data, &node));
+        break;
+    }
+    case TYPE_TINYINT: {
+        static_cast<void>(create_texpr_literal_node<TYPE_TINYINT>(data, &node));
+        break;
+    }
+    case TYPE_SMALLINT: {
+        static_cast<void>(create_texpr_literal_node<TYPE_SMALLINT>(data, &node));
+        break;
+    }
+    case TYPE_INT: {
+        static_cast<void>(create_texpr_literal_node<TYPE_INT>(data, &node));
+        break;
+    }
+    case TYPE_BIGINT: {
+        static_cast<void>(create_texpr_literal_node<TYPE_BIGINT>(data, &node));
+        break;
+    }
+    case TYPE_LARGEINT: {
+        static_cast<void>(create_texpr_literal_node<TYPE_LARGEINT>(data, &node));
+        break;
+    }
+    case TYPE_FLOAT: {
+        static_cast<void>(create_texpr_literal_node<TYPE_FLOAT>(data, &node));
+        break;
+    }
+    case TYPE_DOUBLE: {
+        static_cast<void>(create_texpr_literal_node<TYPE_DOUBLE>(data, &node));
+        break;
+    }
+    case TYPE_DATEV2: {
+        static_cast<void>(create_texpr_literal_node<TYPE_DATEV2>(data, &node));
+        break;
+    }
+    case TYPE_DATETIMEV2: {
+        static_cast<void>(create_texpr_literal_node<TYPE_DATETIMEV2>(data, &node));
+        break;
+    }
+    case TYPE_DATE: {
+        static_cast<void>(create_texpr_literal_node<TYPE_DATE>(data, &node));
+        break;
+    }
+    case TYPE_DATETIME: {
+        static_cast<void>(create_texpr_literal_node<TYPE_DATETIME>(data, &node));
+        break;
+    }
+    case TYPE_DECIMALV2: {
+        static_cast<void>(create_texpr_literal_node<TYPE_DECIMALV2>(data, &node, precision, scale));
+        break;
+    }
+    case TYPE_DECIMAL32: {
+        static_cast<void>(create_texpr_literal_node<TYPE_DECIMAL32>(data, &node, precision, scale));
+        break;
+    }
+    case TYPE_DECIMAL64: {
+        static_cast<void>(create_texpr_literal_node<TYPE_DECIMAL64>(data, &node, precision, scale));
+        break;
+    }
+    case TYPE_DECIMAL128I: {
+        static_cast<void>(
+                create_texpr_literal_node<TYPE_DECIMAL128I>(data, &node, precision, scale));
+        break;
+    }
+    case TYPE_DECIMAL256: {
+        static_cast<void>(
+                create_texpr_literal_node<TYPE_DECIMAL256>(data, &node, precision, scale));
+        break;
+    }
+    case TYPE_CHAR: {
+        static_cast<void>(create_texpr_literal_node<TYPE_CHAR>(data, &node));
+        break;
+    }
+    case TYPE_VARCHAR: {
+        static_cast<void>(create_texpr_literal_node<TYPE_VARCHAR>(data, &node));
+        break;
+    }
+    case TYPE_STRING: {
+        static_cast<void>(create_texpr_literal_node<TYPE_STRING>(data, &node));
+        break;
+    }
+    default:
+        DCHECK(false);
+        throw std::invalid_argument("Invalid type!");
+    }
+    return node;
+}
 } // namespace doris
 
 namespace doris::vectorized {
+
+bool VExpr::is_acting_on_a_slot(const VExpr& expr) {
+    const auto& children = expr.children();
+
+    auto is_a_slot = std::any_of(children.begin(), children.end(),
+                                 [](const auto& child) { return is_acting_on_a_slot(*child); });
+
+    return is_a_slot ? true : (expr.node_type() == TExprNodeType::SLOT_REF);
+}
 
 VExpr::VExpr(const TExprNode& node)
         : _node_type(node.node_type),
@@ -114,6 +216,9 @@ Status VExpr::open(RuntimeState* state, VExprContext* context,
     for (int i = 0; i < _children.size(); ++i) {
         RETURN_IF_ERROR(_children[i]->open(state, context, scope));
     }
+    if (scope == FunctionContext::FRAGMENT_LOCAL) {
+        RETURN_IF_ERROR(VExpr::get_const_col(context, nullptr));
+    }
     return Status::OK();
 }
 
@@ -129,6 +234,8 @@ Status VExpr::create_expr(const TExprNode& expr_node, VExprSPtr& expr) {
         case TExprNodeType::BOOL_LITERAL:
         case TExprNodeType::INT_LITERAL:
         case TExprNodeType::LARGE_INT_LITERAL:
+        case TExprNodeType::IPV4_LITERAL:
+        case TExprNodeType::IPV6_LITERAL:
         case TExprNodeType::FLOAT_LITERAL:
         case TExprNodeType::DECIMAL_LITERAL:
         case TExprNodeType::DATE_LITERAL:
@@ -379,6 +486,7 @@ Status VExpr::get_const_col(VExprContext* context,
     }
 
     if (_constant_col != nullptr) {
+        DCHECK(column_wrapper != nullptr);
         *column_wrapper = _constant_col;
         return Status::OK();
     }
@@ -392,7 +500,10 @@ Status VExpr::get_const_col(VExprContext* context,
     DCHECK(result != -1);
     const auto& column = block.get_by_position(result).column;
     _constant_col = std::make_shared<ColumnPtrWrapper>(column);
-    *column_wrapper = _constant_col;
+    if (column_wrapper != nullptr) {
+        *column_wrapper = _constant_col;
+    }
+
     return Status::OK();
 }
 
@@ -430,9 +541,9 @@ void VExpr::close_function_context(VExprContext* context, FunctionContext::Funct
                                    const FunctionBasePtr& function) const {
     if (_fn_context_index != -1) {
         FunctionContext* fn_ctx = context->fn_context(_fn_context_index);
-        function->close(fn_ctx, FunctionContext::THREAD_LOCAL);
+        static_cast<void>(function->close(fn_ctx, FunctionContext::THREAD_LOCAL));
         if (scope == FunctionContext::FRAGMENT_LOCAL) {
-            function->close(fn_ctx, FunctionContext::FRAGMENT_LOCAL);
+            static_cast<void>(function->close(fn_ctx, FunctionContext::FRAGMENT_LOCAL));
         }
     }
 }

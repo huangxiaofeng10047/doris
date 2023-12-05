@@ -19,10 +19,12 @@
 
 #include "exprs/hybrid_set.h"
 #include "exprs/minmax_predicate.h"
+#include "function_filter.h"
 #include "olap/bitmap_filter_predicate.h"
 #include "olap/bloom_filter_predicate.h"
 #include "olap/column_predicate.h"
 #include "olap/in_list_predicate.h"
+#include "olap/like_column_predicate.h"
 #include "runtime/define_primitive_type.h"
 
 namespace doris {
@@ -32,10 +34,7 @@ public:
     using BasePtr = MinMaxFuncBase*;
     template <PrimitiveType type, size_t N>
     static BasePtr get_function() {
-        return new MinMaxNumFunc<std::conditional_t<
-                type == TYPE_DECIMAL32 || type == TYPE_DECIMAL64 || type == TYPE_DECIMAL128I,
-                vectorized::Decimal<typename PrimitiveTypeTraits<type>::CppType>,
-                typename PrimitiveTypeTraits<type>::CppType>>();
+        return new MinMaxNumFunc<typename PrimitiveTypeTraits<type>::CppType>();
     }
 };
 
@@ -104,7 +103,10 @@ public:
     M(TYPE_STRING)            \
     M(TYPE_DECIMAL32)         \
     M(TYPE_DECIMAL64)         \
-    M(TYPE_DECIMAL128I)
+    M(TYPE_DECIMAL128I)       \
+    M(TYPE_DECIMAL256)        \
+    M(TYPE_IPV4)              \
+    M(TYPE_IPV6)
 
 template <class Traits, size_t N = 0>
 typename Traits::BasePtr create_predicate_function(PrimitiveType type) {
@@ -254,6 +256,24 @@ ColumnPredicate* create_olap_column_predicate(uint32_t column_id,
                                               const TabletColumn* column = nullptr) {
     return create_in_list_predicate<PT, PredicateType::IN_LIST>(column_id, filter,
                                                                 column->length());
+}
+
+template <PrimitiveType PT>
+ColumnPredicate* create_olap_column_predicate(uint32_t column_id,
+                                              const std::shared_ptr<FunctionFilter>& filter, int,
+                                              const TabletColumn* column = nullptr) {
+    // currently only support like predicate
+    if constexpr (PT == TYPE_CHAR || PT == TYPE_VARCHAR || PT == TYPE_STRING) {
+        if constexpr (PT == TYPE_CHAR) {
+            return new LikeColumnPredicate<TYPE_CHAR>(filter->_opposite, column_id, filter->_fn_ctx,
+                                                      filter->_string_param);
+        } else {
+            return new LikeColumnPredicate<TYPE_STRING>(filter->_opposite, column_id,
+                                                        filter->_fn_ctx, filter->_string_param);
+        }
+    } else {
+        return nullptr;
+    }
 }
 
 template <typename T>

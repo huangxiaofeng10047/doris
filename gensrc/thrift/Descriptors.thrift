@@ -20,6 +20,7 @@ namespace java org.apache.doris.thrift
 
 include "Types.thrift"
 include "Exprs.thrift"
+include "Partitions.thrift"
 
 struct TColumn {
     1: required string column_name
@@ -40,6 +41,7 @@ struct TColumn {
     16: optional string aggregation
     17: optional bool result_is_nullable
     18: optional bool is_auto_increment = false;
+    19: optional i32 cluster_key_id = -1
 }
 
 struct TSlotDescriptor {
@@ -59,6 +61,10 @@ struct TSlotDescriptor {
   // materialize them.Used to optmize to read less data and less memory usage
   13: optional bool need_materialize = true
   14: optional bool is_auto_increment = false;
+  // subcolumn path info list for semi structure column(variant)
+  15: optional list<string> column_paths
+  16: optional string col_default_value
+  17: optional Types.TPrimitiveType primitive_type = Types.TPrimitiveType.INVALID_TYPE
 }
 
 struct TTupleDescriptor {
@@ -117,7 +123,9 @@ enum TSchemaTableType {
     SCH_ROWSETS,
     SCH_BACKENDS,
     SCH_COLUMN_STATISTICS,
-    SCH_PARAMETERS;
+    SCH_PARAMETERS,
+    SCH_METADATA_NAME_IDS,
+    SCH_PROFILING;
 }
 
 enum THdfsCompression {
@@ -171,6 +179,8 @@ struct TOlapTablePartition {
     9: optional bool is_mutable = true
     // only used in List Partition
     10: optional bool is_default_partition;
+    // only used in random distribution scenario to make data distributed even 
+    11: optional i64 load_tablet_idx
 }
 
 struct TOlapTablePartitionParam {
@@ -189,6 +199,9 @@ struct TOlapTablePartitionParam {
     6: required list<TOlapTablePartition> partitions
 
     7: optional list<string> partition_columns
+    8: optional list<Exprs.TExpr> partition_function_exprs
+    9: optional bool enable_automatic_partition
+    10: optional Partitions.TPartitionType partition_type
 }
 
 struct TOlapTableIndex {

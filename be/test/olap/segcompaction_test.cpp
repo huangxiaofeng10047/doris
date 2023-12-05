@@ -47,7 +47,7 @@ namespace doris {
 using namespace ErrorCode;
 
 static const uint32_t MAX_PATH_LEN = 1024;
-StorageEngine* l_engine = nullptr;
+static std::unique_ptr<StorageEngine> l_engine;
 static const std::string lTestDir = "./data_test/data/segcompaction_test";
 
 class SegCompactionTest : public testing::Test {
@@ -79,7 +79,6 @@ public:
         EXPECT_TRUE(s.ok()) << s.to_string();
 
         ExecEnv* exec_env = doris::ExecEnv::GetInstance();
-        exec_env->set_storage_engine(l_engine);
 
         EXPECT_TRUE(io::global_local_filesystem()->create_directory(lTestDir).ok());
 
@@ -87,11 +86,7 @@ public:
     }
 
     void TearDown() {
-        if (l_engine != nullptr) {
-            l_engine->stop();
-            delete l_engine;
-            l_engine = nullptr;
-        }
+        l_engine.reset();
         config::enable_segcompaction = false;
     }
 
@@ -268,7 +263,7 @@ TEST_F(SegCompactionTest, SegCompactionThenRead) {
             sleep(1);
         }
 
-        rowset = rowset_writer->build();
+        EXPECT_EQ(Status::OK(), rowset_writer->build(rowset));
         std::vector<std::string> ls;
         ls.push_back("10047_0.dat");
         ls.push_back("10047_1.dat");
@@ -464,7 +459,7 @@ TEST_F(SegCompactionTest, SegCompactionInterleaveWithBig_ooooOOoOooooooooO) {
             sleep(1);
         }
 
-        rowset = rowset_writer->build();
+        EXPECT_EQ(Status::OK(), rowset_writer->build(rowset));
         std::vector<std::string> ls;
         // ooooOOoOooooooooO
         ls.push_back("10048_0.dat"); // oooo
@@ -590,7 +585,7 @@ TEST_F(SegCompactionTest, SegCompactionInterleaveWithBig_OoOoO) {
             sleep(1);
         }
 
-        rowset = rowset_writer->build();
+        EXPECT_EQ(Status::OK(), rowset_writer->build(rowset));
         std::vector<std::string> ls;
         ls.push_back("10049_0.dat"); // O
         ls.push_back("10049_1.dat"); // o
@@ -769,7 +764,7 @@ TEST_F(SegCompactionTest, SegCompactionThenReadUniqueTableSmall) {
         EXPECT_EQ(Status::OK(), s);
         sleep(1);
 
-        rowset = rowset_writer->build();
+        EXPECT_EQ(Status::OK(), rowset_writer->build(rowset));
         std::vector<std::string> ls;
         ls.push_back("10051_0.dat");
         ls.push_back("10051_1.dat");
@@ -1003,7 +998,7 @@ TEST_F(SegCompactionTest, SegCompactionThenReadAggTableSmall) {
         EXPECT_EQ(Status::OK(), s);
         sleep(1);
 
-        rowset = rowset_writer->build();
+        EXPECT_EQ(Status::OK(), rowset_writer->build(rowset));
         std::vector<std::string> ls;
         ls.push_back("10052_0.dat");
         ls.push_back("10052_1.dat");

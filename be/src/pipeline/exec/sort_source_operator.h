@@ -21,6 +21,7 @@
 
 #include "common/status.h"
 #include "operator.h"
+#include "pipeline/pipeline_x/operator.h"
 #include "vec/exec/vsort_node.h"
 
 namespace doris {
@@ -44,33 +45,29 @@ public:
     Status open(RuntimeState*) override { return Status::OK(); }
 };
 
-class SortSourceOperatorX;
-class SortLocalState final : public PipelineXLocalState {
-    ENABLE_FACTORY_CREATOR(SortLocalState);
-
+class SortSourceDependency final : public Dependency {
 public:
-    SortLocalState(RuntimeState* state, OperatorXBase* parent);
+    using SharedState = SortSharedState;
+    SortSourceDependency(int id, int node_id, QueryContext* query_ctx)
+            : Dependency(id, node_id, "SortSourceDependency", query_ctx) {}
+    ~SortSourceDependency() override = default;
+};
 
-    Status init(RuntimeState* state, LocalStateInfo& info) override;
-    Status close(RuntimeState* state) override;
+class SortSourceOperatorX;
+class SortLocalState final : public PipelineXLocalState<SortSourceDependency> {
+public:
+    ENABLE_FACTORY_CREATOR(SortLocalState);
+    SortLocalState(RuntimeState* state, OperatorXBase* parent);
+    ~SortLocalState() override = default;
 
 private:
     friend class SortSourceOperatorX;
-
-    SortDependency* _dependency;
-    SortSharedState* _shared_state;
-
-    RuntimeProfile::Counter* _get_next_timer = nullptr;
 };
 
-class SortSourceOperatorX final : public OperatorXBase {
+class SortSourceOperatorX final : public OperatorX<SortLocalState> {
 public:
-    SortSourceOperatorX(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs,
-                        std::string op_name);
-    bool can_read(RuntimeState* state) override;
-
-    Status setup_local_state(RuntimeState* state, LocalStateInfo& info) override;
-
+    SortSourceOperatorX(ObjectPool* pool, const TPlanNode& tnode, int operator_id,
+                        const DescriptorTbl& descs);
     Status get_block(RuntimeState* state, vectorized::Block* block,
                      SourceState& source_state) override;
 

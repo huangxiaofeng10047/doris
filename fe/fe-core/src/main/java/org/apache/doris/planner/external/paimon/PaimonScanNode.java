@@ -69,7 +69,7 @@ public class PaimonScanNode extends FileQueryScanNode {
                     String.format("Querying external view '%s.%s' is not supported", table.getDbName(),
                             table.getName()));
         }
-        computeColumnFilter();
+        computeColumnsFilter();
         initBackendPolicy();
         source = new PaimonSource((PaimonExternalTable) table, desc, columnNameToRange);
         Preconditions.checkNotNull(source);
@@ -102,6 +102,10 @@ public class PaimonScanNode extends FileQueryScanNode {
         fileDesc.setDbName(((PaimonExternalTable) source.getTargetTable()).getDbName());
         fileDesc.setPaimonOptions(((PaimonExternalCatalog) source.getCatalog()).getPaimonOptionsMap());
         fileDesc.setTableName(source.getTargetTable().getName());
+        fileDesc.setCtlId(source.getCatalog().getId());
+        fileDesc.setDbId(((PaimonExternalTable) source.getTargetTable()).getDbId());
+        fileDesc.setTblId(source.getTargetTable().getId());
+        fileDesc.setLastUpdateTime(source.getTargetTable().getLastUpdateTime());
         tableFormatFileDesc.setPaimonParams(fileDesc);
         rangeDesc.setTableFormatParams(tableFormatFileDesc);
     }

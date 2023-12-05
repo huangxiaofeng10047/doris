@@ -22,6 +22,7 @@
 
 #include "operator.h"
 #include "pipeline/pipeline_x/dependency.h"
+#include "pipeline/pipeline_x/operator.h"
 #include "vec/exec/vanalytic_eval_node.h"
 
 namespace doris {
@@ -44,50 +45,68 @@ public:
     bool can_write() override { return _node->can_write(); }
 };
 
+class AnalyticSinkDependency final : public Dependency {
+public:
+    using SharedState = AnalyticSharedState;
+    AnalyticSinkDependency(int id, int node_id, QueryContext* query_ctx)
+            : Dependency(id, node_id, "AnalyticSinkDependency", true, query_ctx) {}
+    ~AnalyticSinkDependency() override = default;
+};
+
 class AnalyticSinkOperatorX;
 
-class AnalyticSinkLocalState : public PipelineXSinkLocalState {
+class AnalyticSinkLocalState : public PipelineXSinkLocalState<AnalyticSinkDependency> {
     ENABLE_FACTORY_CREATOR(AnalyticSinkLocalState);
 
 public:
-    AnalyticSinkLocalState(DataSinkOperatorX* parent, RuntimeState* state)
-            : PipelineXSinkLocalState(parent, state) {}
+    AnalyticSinkLocalState(DataSinkOperatorXBase* parent, RuntimeState* state)
+            : PipelineXSinkLocalState<AnalyticSinkDependency>(parent, state) {}
 
     Status init(RuntimeState* state, LocalSinkStateInfo& info) override;
 
 private:
     friend class AnalyticSinkOperatorX;
-    AnalyticDependency* _dependency;
-    AnalyticSharedState* _shared_state;
 
-    RuntimeProfile::Counter* _memory_usage_counter;
-    RuntimeProfile::Counter* _evaluation_timer;
-    RuntimeProfile::HighWaterMarkCounter* _blocks_memory_usage;
+    bool _refresh_need_more_input() {
+        auto need_more_input = _whether_need_next_partition(_shared_state->found_partition_end);
+        if (need_more_input) {
+            _shared_state->source_dep->block();
+            _dependency->set_ready();
+        } else {
+            _dependency->block();
+            _shared_state->source_dep->set_ready();
+        }
+        return need_more_input;
+    }
+    vectorized::BlockRowPos _get_partition_by_end();
+    vectorized::BlockRowPos _compare_row_to_find_end(int idx, vectorized::BlockRowPos start,
+                                                     vectorized::BlockRowPos end,
+                                                     bool need_check_first = false);
+    bool _whether_need_next_partition(vectorized::BlockRowPos& found_partition_end);
+
+    RuntimeProfile::Counter* _memory_usage_counter = nullptr;
+    RuntimeProfile::Counter* _evaluation_timer = nullptr;
+    RuntimeProfile::HighWaterMarkCounter* _blocks_memory_usage = nullptr;
 
     std::vector<vectorized::VExprContextSPtrs> _agg_expr_ctxs;
 };
 
-class AnalyticSinkOperatorX final : public DataSinkOperatorX {
+class AnalyticSinkOperatorX final : public DataSinkOperatorX<AnalyticSinkLocalState> {
 public:
-    AnalyticSinkOperatorX(ObjectPool* pool, const TPlanNode& tnode, const DescriptorTbl& descs);
+    AnalyticSinkOperatorX(ObjectPool* pool, int operator_id, const TPlanNode& tnode,
+                          const DescriptorTbl& descs);
     Status init(const TDataSink& tsink) override {
-        return Status::InternalError("{} should not init with TPlanNode", _name);
+        return Status::InternalError("{} should not init with TPlanNode",
+                                     DataSinkOperatorX<AnalyticSinkLocalState>::_name);
     }
 
     Status init(const TPlanNode& tnode, RuntimeState* state) override;
 
     Status prepare(RuntimeState* state) override;
     Status open(RuntimeState* state) override;
-    Status setup_local_state(RuntimeState* state, LocalSinkStateInfo& info) override;
 
     Status sink(RuntimeState* state, vectorized::Block* in_block,
                 SourceState source_state) override;
-
-    bool can_write(RuntimeState* state) override;
-
-    void get_dependency(DependencySPtr& dependency) override {
-        dependency.reset(new AnalyticDependency(id()));
-    }
 
 private:
     Status _insert_range_column(vectorized::Block* block, const vectorized::VExprContextSPtr& expr,

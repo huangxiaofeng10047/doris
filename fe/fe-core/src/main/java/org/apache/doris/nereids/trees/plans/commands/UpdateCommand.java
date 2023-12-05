@@ -25,6 +25,7 @@ import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.nereids.analyzer.UnboundOlapTableSink;
 import org.apache.doris.nereids.analyzer.UnboundSlot;
+import org.apache.doris.nereids.parser.NereidsParser;
 import org.apache.doris.nereids.trees.expressions.Alias;
 import org.apache.doris.nereids.trees.expressions.EqualTo;
 import org.apache.doris.nereids.trees.expressions.Expression;
@@ -71,22 +72,24 @@ public class UpdateCommand extends Command implements ForwardWithSync, Explainab
     private final @Nullable String tableAlias;
     private final LogicalPlan logicalQuery;
     private OlapTable targetTable;
+    private final Optional<LogicalPlan> cte;
 
     /**
      * constructor
      */
     public UpdateCommand(List<String> nameParts, @Nullable String tableAlias, List<EqualTo> assignments,
-            LogicalPlan logicalQuery) {
+            LogicalPlan logicalQuery, Optional<LogicalPlan> cte) {
         super(PlanType.UPDATE_COMMAND);
         this.nameParts = Utils.copyRequiredList(nameParts);
         this.assignments = Utils.copyRequiredList(assignments);
         this.tableAlias = tableAlias;
         this.logicalQuery = Objects.requireNonNull(logicalQuery, "logicalQuery is required in update command");
+        this.cte = cte;
     }
 
     @Override
     public void run(ConnectContext ctx, StmtExecutor executor) throws Exception {
-        new InsertIntoTableCommand(completeQueryPlan(ctx, logicalQuery), Optional.empty()).run(ctx, executor);
+        new InsertIntoTableCommand(completeQueryPlan(ctx, logicalQuery), Optional.empty(), false).run(ctx, executor);
     }
 
     /**
@@ -103,24 +106,38 @@ public class UpdateCommand extends Command implements ForwardWithSync, Explainab
         List<NamedExpression> selectItems = Lists.newArrayList();
         String tableName = tableAlias != null ? tableAlias : targetTable.getName();
         for (Column column : targetTable.getFullSchema()) {
-            if (!column.isVisible()) {
+            // if it sets sequence column in stream load phase, the sequence map column is null, we query it.
+            if (!column.isVisible() && !column.isSequenceColumn()) {
                 continue;
             }
             if (colNameToExpression.containsKey(column.getName())) {
                 Expression expr = colNameToExpression.get(column.getName());
                 selectItems.add(expr instanceof UnboundSlot
                         ? ((NamedExpression) expr)
-                        : new Alias(expr, expr.toSql()));
+                        : new Alias(expr));
             } else {
-                selectItems.add(new UnboundSlot(tableName, column.getName()));
+                if (column.hasOnUpdateDefaultValue()) {
+                    Expression defualtValueExpression =
+                            new NereidsParser().parseExpression(column.getOnUpdateDefaultValueExpr()
+                                    .toSqlWithoutTbl());
+                    selectItems.add(new Alias(defualtValueExpression, column.getName()));
+                } else {
+                    selectItems.add(new UnboundSlot(tableName, column.getName()));
+                }
             }
         }
 
         logicalQuery = new LogicalProject<>(selectItems, logicalQuery);
+        if (cte.isPresent()) {
+            logicalQuery = ((LogicalPlan) cte.get().withChildren(logicalQuery));
+        }
+
+        boolean isPartialUpdate = targetTable.getEnableUniqueKeyMergeOnWrite()
+                && selectItems.size() < targetTable.getColumns().size();
 
         // make UnboundTableSink
         return new UnboundOlapTableSink<>(nameParts, ImmutableList.of(), ImmutableList.of(),
-                ImmutableList.of(), logicalQuery);
+                ImmutableList.of(), isPartialUpdate, logicalQuery);
     }
 
     private void checkTable(ConnectContext ctx) throws AnalysisException {

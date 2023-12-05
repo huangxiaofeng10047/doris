@@ -19,7 +19,6 @@
 
 #include <gen_cpp/Exprs_types.h>
 #include <gen_cpp/PlanNodes_types.h>
-#include <opentelemetry/nostd/shared_ptr.h>
 
 #include <algorithm>
 #include <boost/iterator/iterator_facade.hpp>
@@ -31,7 +30,6 @@
 #include "common/status.h"
 #include "runtime/runtime_state.h"
 #include "util/runtime_profile.h"
-#include "util/telemetry/telemetry.h"
 #include "vec/columns/column_vector.h"
 #include "vec/columns/columns_number.h"
 #include "vec/core/block.h"
@@ -61,8 +59,8 @@ Status VUnionNode::init(const TPlanNode& tnode, RuntimeState* state) {
     RETURN_IF_ERROR(ExecNode::init(tnode, state));
     DCHECK(tnode.__isset.union_node);
     // Create const_expr_ctx_lists_ from thrift exprs.
-    auto& const_texpr_lists = tnode.union_node.const_expr_lists;
-    for (auto& texprs : const_texpr_lists) {
+    const auto& const_texpr_lists = tnode.union_node.const_expr_lists;
+    for (const auto& texprs : const_texpr_lists) {
         VExprContextSPtrs ctxs;
         RETURN_IF_ERROR(VExpr::create_expr_trees(texprs, ctxs));
         _const_expr_lists.push_back(ctxs);
@@ -80,6 +78,7 @@ Status VUnionNode::init(const TPlanNode& tnode, RuntimeState* state) {
 Status VUnionNode::prepare(RuntimeState* state) {
     SCOPED_TIMER(_runtime_profile->total_time_counter());
     RETURN_IF_ERROR(ExecNode::prepare(state));
+    SCOPED_TIMER(_exec_timer);
     _materialize_exprs_evaluate_timer =
             ADD_TIMER(_runtime_profile, "MaterializeExprsEvaluateTimer");
     // Prepare const expr lists.
@@ -105,7 +104,14 @@ Status VUnionNode::open(RuntimeState* state) {
 }
 
 Status VUnionNode::alloc_resource(RuntimeState* state) {
+    SCOPED_TIMER(_exec_timer);
     SCOPED_TIMER(_runtime_profile->total_time_counter());
+
+    std::unique_lock<std::mutex> l(_resource_lock);
+    if (_resource_allocated) {
+        return Status::OK();
+    }
+
     // open const expr lists.
     for (const auto& exprs : _const_expr_lists) {
         RETURN_IF_ERROR(VExpr::open(exprs, state));
@@ -114,7 +120,9 @@ Status VUnionNode::alloc_resource(RuntimeState* state) {
     for (const auto& exprs : _child_expr_lists) {
         RETURN_IF_ERROR(VExpr::open(exprs, state));
     }
-    return ExecNode::alloc_resource(state);
+    RETURN_IF_ERROR(ExecNode::alloc_resource(state));
+    _resource_allocated = true;
+    return Status::OK();
 }
 
 Status VUnionNode::get_next_pass_through(RuntimeState* state, Block* block) {
@@ -203,6 +211,7 @@ Status VUnionNode::get_next_materialized(RuntimeState* state, Block* block) {
 }
 
 Status VUnionNode::get_next_const(RuntimeState* state, Block* block) {
+    SCOPED_TIMER(_exec_timer);
     DCHECK_EQ(state->per_fragment_instance_idx(), 0);
     DCHECK_LT(_const_expr_list_idx, _const_expr_lists.size());
 
@@ -261,7 +270,7 @@ Status VUnionNode::get_next(RuntimeState* state, Block* block, bool* eos) {
         // passthrough case, the child was already closed in the previous call to get_next().
         DCHECK(is_child_passthrough(_to_close_child_idx));
         DCHECK(!is_in_subplan());
-        child(_to_close_child_idx)->close(state);
+        static_cast<void>(child(_to_close_child_idx)->close(state));
         _to_close_child_idx = -1;
     }
 
@@ -274,6 +283,7 @@ Status VUnionNode::get_next(RuntimeState* state, Block* block, bool* eos) {
     } else if (has_more_const(state)) {
         RETURN_IF_ERROR(get_next_const(state, block));
     }
+    SCOPED_TIMER(_exec_timer);
     RETURN_IF_ERROR(VExprContext::filter_block(_conjuncts, block, block->columns()));
 
     *eos = (!has_more_passthrough() && !has_more_materialized() && !has_more_const(state));
@@ -310,6 +320,7 @@ void VUnionNode::debug_string(int indentation_level, std::stringstream* out) con
 }
 
 Status VUnionNode::materialize_block(Block* src_block, int child_idx, Block* res_block) {
+    SCOPED_TIMER(_exec_timer);
     const auto& child_exprs = _child_expr_lists[child_idx];
     ColumnsWithTypeAndName colunms;
     for (size_t i = 0; i < child_exprs.size(); ++i) {

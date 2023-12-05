@@ -17,11 +17,11 @@
 
 package org.apache.doris.statistics;
 
-import org.apache.doris.catalog.Database;
+import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.MaterializedIndexMeta;
 import org.apache.doris.catalog.OlapTable;
-import org.apache.doris.catalog.Table;
+import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.common.util.MasterDaemon;
@@ -30,6 +30,7 @@ import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.statistics.util.StatisticsUtil;
 import org.apache.doris.system.SystemInfoService;
 
+import com.google.common.collect.Maps;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.text.StringSubstitutor;
 import org.apache.logging.log4j.LogManager;
@@ -54,13 +55,9 @@ public class StatisticsCleaner extends MasterDaemon {
     private OlapTable colStatsTbl;
     private OlapTable histStatsTbl;
 
-    private Map<Long, CatalogIf> idToCatalog;
-
-    /* Internal DB only */
-    private Map<Long, Database> idToDb;
-
-    /* Internal tbl only */
-    private Map<Long, Table> idToTbl;
+    private Map<Long, CatalogIf<? extends DatabaseIf<? extends TableIf>>> idToCatalog;
+    private Map<Long, DatabaseIf> idToDb;
+    private Map<Long, TableIf> idToTbl;
 
     private Map<Long, MaterializedIndexMeta> idToMVIdx;
 
@@ -78,11 +75,20 @@ public class StatisticsCleaner extends MasterDaemon {
     }
 
     public synchronized void clear() {
-        if (!init()) {
-            return;
+        try {
+            if (!init()) {
+                return;
+            }
+            clearStats(colStatsTbl);
+            clearStats(histStatsTbl);
+        } finally {
+            colStatsTbl = null;
+            histStatsTbl = null;
+            idToCatalog = null;
+            idToDb = null;
+            idToTbl = null;
+            idToMVIdx = null;
         }
-        clearStats(colStatsTbl);
-        clearStats(histStatsTbl);
     }
 
     private void clearStats(OlapTable statsTbl) {
@@ -114,15 +120,23 @@ public class StatisticsCleaner extends MasterDaemon {
         }
 
         idToCatalog = Env.getCurrentEnv().getCatalogMgr().getIdToCatalog();
-        idToDb = Env.getCurrentEnv().getInternalCatalog().getIdToDb();
+        idToDb = constructDbMap();
         idToTbl = constructTblMap();
         idToMVIdx = constructIdxMap();
         return true;
     }
 
-    private Map<Long, Table> constructTblMap() {
-        Map<Long, Table> idToTbl = new HashMap<>();
-        for (Database db : idToDb.values()) {
+    private Map<Long, DatabaseIf> constructDbMap() {
+        Map<Long, DatabaseIf> idToDb = Maps.newHashMap();
+        for (CatalogIf ctl : idToCatalog.values()) {
+            idToDb.putAll(ctl.getIdToDb());
+        }
+        return idToDb;
+    }
+
+    private Map<Long, TableIf> constructTblMap() {
+        Map<Long, TableIf> idToTbl = new HashMap<>();
+        for (DatabaseIf db : idToDb.values()) {
             idToTbl.putAll(db.getIdToTable());
         }
         return idToTbl;
@@ -130,7 +144,7 @@ public class StatisticsCleaner extends MasterDaemon {
 
     private Map<Long, MaterializedIndexMeta> constructIdxMap() {
         Map<Long, MaterializedIndexMeta> idToMVIdx = new HashMap<>();
-        for (Table t : idToTbl.values()) {
+        for (TableIf t : idToTbl.values()) {
             if (t instanceof OlapTable) {
                 OlapTable olapTable = (OlapTable) t;
                 olapTable.getCopyOfIndexIdToMeta()
@@ -213,7 +227,7 @@ public class StatisticsCleaner extends MasterDaemon {
                         continue;
                     }
 
-                    Table t = idToTbl.get(tblId);
+                    TableIf t = idToTbl.get(tblId);
                     String colId = statsId.colId;
                     if (t.getColumn(colId) == null) {
                         expiredStats.ids.add(id);
@@ -223,11 +237,11 @@ public class StatisticsCleaner extends MasterDaemon {
                         continue;
                     }
                     OlapTable olapTable = (OlapTable) t;
-                    Long partId = statsId.partId;
+                    String partId = statsId.partId;
                     if (partId == null) {
                         continue;
                     }
-                    if (!olapTable.getPartitionIds().contains(partId)) {
+                    if (!olapTable.getPartitionIds().contains(Long.parseLong(partId))) {
                         expiredStats.ids.add(id);
                     }
                 } catch (Exception e) {
