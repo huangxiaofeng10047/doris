@@ -29,10 +29,10 @@
 #include "common/factory_creator.h"
 #include "common/status.h"
 #include "olap/data_dir.h"
-#include "olap/reader.h"
 #include "olap/rowset/rowset_meta.h"
 #include "olap/rowset/rowset_reader.h"
 #include "olap/tablet.h"
+#include "olap/tablet_reader.h"
 #include "olap/tablet_schema.h"
 #include "vec/exec/scan/vscanner.h"
 
@@ -43,11 +43,14 @@ class FunctionFilter;
 class RuntimeProfile;
 class RuntimeState;
 class TPaloScanRange;
+namespace pipeline {
+class ScanLocalStateBase;
+struct FilterPredicates;
+} // namespace pipeline
 
 namespace vectorized {
 
 class NewOlapScanNode;
-struct FilterPredicates;
 class Block;
 
 class NewOlapScanner : public VScanner {
@@ -65,8 +68,7 @@ public:
         bool aggregation;
     };
 
-    template <class T>
-    NewOlapScanner(T* parent, Params&& params);
+    NewOlapScanner(pipeline::ScanLocalStateBase* parent, Params&& params);
 
     Status init() override;
 
@@ -82,18 +84,17 @@ public:
 
 protected:
     Status _get_block_impl(RuntimeState* state, Block* block, bool* eos) override;
-    void _update_counters_before_close() override;
+    void _collect_profile_before_close() override;
 
 private:
     void _update_realtime_counters();
 
     Status _init_tablet_reader_params(const std::vector<OlapScanRange*>& key_ranges,
                                       const std::vector<TCondition>& filters,
-                                      const FilterPredicates& filter_predicates,
+                                      const pipeline::FilterPredicates& filter_predicates,
                                       const std::vector<FunctionFilter>& function_filters);
 
     [[nodiscard]] Status _init_return_columns();
-    vectorized::PathInData _build_path(SlotDescriptor* slot, const std::string& root_name);
     [[nodiscard]] Status _init_variant_columns();
 
     std::vector<OlapScanRange*> _key_ranges;

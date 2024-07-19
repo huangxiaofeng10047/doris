@@ -511,12 +511,13 @@ TEST(MathFunctionTest, money_format_test) {
         InputTypeSet input_types = {TypeIndex::Float64};
         DataSet data_set = {{{Null()}, Null()},
                             {{DOUBLE(17014116.67)}, VARCHAR("17,014,116.67")},
-                            {{DOUBLE(-17014116.67)}, VARCHAR("-17,014,116.67")}};
+                            {{DOUBLE(-17014116.67)}, VARCHAR("-17,014,116.67")},
+                            {{DOUBLE(-123.45)}, VARCHAR("-123.45")}};
 
         static_cast<void>(check_function<DataTypeString, true>(func_name, input_types, data_set));
     }
     {
-        InputTypeSet input_types = {TypeIndex::Decimal128};
+        InputTypeSet input_types = {TypeIndex::Decimal128V2};
         DataSet data_set = {{{Null()}, Null()},
                             {{DECIMAL(17014116.67)}, VARCHAR("17,014,116.67")},
                             {{DECIMAL(-17014116.67)}, VARCHAR("-17,014,116.67")}};

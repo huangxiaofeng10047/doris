@@ -26,6 +26,7 @@ import com.google.common.collect.Sets;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.BitSet;
 import java.util.List;
 
 /**
@@ -91,8 +92,7 @@ public class ExpressionUtilsTest extends TestWithFeService {
                 + "PROPERTIES (\n"
                 + "  \"replication_num\" = \"1\"\n"
                 + ")");
-        connectContext.getSessionVariable().enableNereidsTimeout = false;
-
+        connectContext.getSessionVariable().setDisableNereidsRules("PRUNE_EMPTY_PARTITION");
     }
 
     @Test
@@ -158,7 +158,7 @@ public class ExpressionUtilsTest extends TestWithFeService {
     }
 
     @Test
-    public void testShuttleExpressionWithLineage1() {
+    public void shuttleExpressionWithLineageTest1() {
         PlanChecker.from(connectContext)
                 .checkExplain("SELECT (o.c1_abs + ps.c2_abs) as add_alias, l.L_LINENUMBER, o.O_ORDERSTATUS "
                                 + "FROM "
@@ -175,11 +175,8 @@ public class ExpressionUtilsTest extends TestWithFeService {
                             Plan rewrittenPlan = nereidsPlanner.getRewrittenPlan();
                             List<? extends Expression> originalExpressions = rewrittenPlan.getExpressions();
                             List<? extends Expression> shuttledExpressions
-                                    = ExpressionUtils.shuttleExpressionWithLineage(
-                                    originalExpressions,
-                                    rewrittenPlan,
-                                    Sets.newHashSet(),
-                                    Sets.newHashSet());
+                                    = ExpressionUtils.shuttleExpressionWithLineage(originalExpressions, rewrittenPlan,
+                                    Sets.newHashSet(), Sets.newHashSet(), new BitSet());
                             assertExpect(originalExpressions, shuttledExpressions,
                                     "(cast(abs((cast(O_TOTALPRICE as DECIMALV3(16, 2)) + 10.00)) as "
                                             + "DOUBLE) + abs(sqrt(cast(PS_SUPPLYCOST as DOUBLE))))",

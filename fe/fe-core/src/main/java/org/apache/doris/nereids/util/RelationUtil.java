@@ -20,12 +20,12 @@ package org.apache.doris.nereids.util;
 import org.apache.doris.catalog.DatabaseIf;
 import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.TableIf;
-import org.apache.doris.cluster.ClusterNamespace;
 import org.apache.doris.common.Pair;
 import org.apache.doris.datasource.CatalogIf;
 import org.apache.doris.nereids.exceptions.AnalysisException;
 import org.apache.doris.qe.ConnectContext;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
@@ -43,18 +43,26 @@ public class RelationUtil {
             case 1: { // table
                 // Use current database name from catalog.
                 String tableName = nameParts.get(0);
-                String catalogName = context.getCurrentCatalog().getName();
+                CatalogIf catalogIf = context.getCurrentCatalog();
+                if (catalogIf == null) {
+                    throw new IllegalStateException("Current catalog is not set.");
+                }
+                String catalogName = catalogIf.getName();
                 String dbName = context.getDatabase();
+                if (Strings.isNullOrEmpty(dbName)) {
+                    throw new IllegalStateException("Current database is not set.");
+                }
                 return ImmutableList.of(catalogName, dbName, tableName);
             }
             case 2: { // db.table
                 // Use database name from table name parts.
-                String catalogName = context.getCurrentCatalog().getName();
+                CatalogIf catalogIf = context.getCurrentCatalog();
+                if (catalogIf == null) {
+                    throw new IllegalStateException("Current catalog is not set.");
+                }
+                String catalogName = catalogIf.getName();
                 // if the relation is view, nameParts.get(0) is dbName.
                 String dbName = nameParts.get(0);
-                if (!dbName.contains(ClusterNamespace.CLUSTER_DELIMITER)) {
-                    dbName = context.getClusterName() + ClusterNamespace.CLUSTER_DELIMITER + dbName;
-                }
                 String tableName = nameParts.get(1);
                 return ImmutableList.of(catalogName, dbName, tableName);
             }
@@ -62,9 +70,6 @@ public class RelationUtil {
                 // Use catalog and database name from name parts.
                 String catalogName = nameParts.get(0);
                 String dbName = nameParts.get(1);
-                if (!dbName.contains(ClusterNamespace.CLUSTER_DELIMITER)) {
-                    dbName = context.getClusterName() + ClusterNamespace.CLUSTER_DELIMITER + dbName;
-                }
                 String tableName = nameParts.get(2);
                 return ImmutableList.of(catalogName, dbName, tableName);
             }
@@ -84,7 +89,7 @@ public class RelationUtil {
     /**
      * get database and table
      */
-    public static Pair<DatabaseIf, TableIf> getDbAndTable(List<String> qualifierName, Env env) {
+    public static Pair<DatabaseIf<?>, TableIf> getDbAndTable(List<String> qualifierName, Env env) {
         String catalogName = qualifierName.get(0);
         String dbName = qualifierName.get(1);
         String tableName = qualifierName.get(2);

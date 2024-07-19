@@ -19,18 +19,51 @@
 
 suite("query32") {
     String db = context.config.getDbNameByFile(new File(context.file.parent))
-    sql "use ${db}"
-    sql 'set enable_nereids_planner=true'
-    sql 'set enable_fallback_to_original_planner=false'
-    sql 'set exec_mem_limit=21G'
-    sql 'set be_number_for_test=3'
-sql 'set enable_runtime_filter_prune=false'
-    sql 'set parallel_fragment_exec_instance_num=8; '
-    sql 'set parallel_pipeline_task_num=8; '
-    sql 'set forbid_unknown_col_stats=true'
-    sql 'set broadcast_row_count_limit = 30000000'
-    sql 'set enable_nereids_timeout = false'
+    multi_sql """
+    use ${db};
+    set enable_nereids_planner=true;
+    set enable_nereids_distribute_planner=false;
+    set enable_fallback_to_original_planner=false;
+    set exec_mem_limit=21G;
+    set be_number_for_test=3;
+    set enable_runtime_filter_prune=false;
+    set parallel_pipeline_task_num=8;
+    set forbid_unknown_col_stats=false;
+    set enable_stats=true;
+    set runtime_filter_type=8;
+    set broadcast_row_count_limit = 30000000;
+    set enable_nereids_timeout = false;
+    set enable_pipeline_engine = true;
+    set disable_nereids_rules='PRUNE_EMPTY_PARTITION';
+    set push_topn_to_agg = true;
+    set topn_opt_limit_threshold=1024;
+    """
 
+    def ds = """select  sum(cs_ext_discount_amt)  as "excess discount amount" 
+from 
+   catalog_sales 
+   ,item 
+   ,date_dim
+where
+i_manufact_id = 722
+and i_item_sk = cs_item_sk 
+and d_date between '2001-03-09' and 
+        (cast('2001-03-09' as date) + interval 90 day)
+and d_date_sk = cs_sold_date_sk 
+and cs_ext_discount_amt  
+     > ( 
+         select 
+            1.3 * avg(cs_ext_discount_amt) 
+         from 
+            catalog_sales 
+           ,date_dim
+         where 
+              cs_item_sk = i_item_sk 
+          and d_date between '2001-03-09' and
+                             (cast('2001-03-09' as date) + interval 90 day)
+          and d_date_sk = cs_sold_date_sk 
+      ) 
+limit 100"""
     qt_ds_shape_32 '''
     explain shape plan
     select  sum(cs_ext_discount_amt)  as "excess discount amount" 
@@ -57,7 +90,6 @@ and cs_ext_discount_amt
                              (cast('2001-03-09' as date) + interval 90 day)
           and d_date_sk = cs_sold_date_sk 
       ) 
-limit 100;
-
+limit 100
     '''
 }

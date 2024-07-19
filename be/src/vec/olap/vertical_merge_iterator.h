@@ -121,7 +121,7 @@ public:
 
     size_t same_source_count(uint16_t source, size_t limit);
 
-    // return continous agg_flag=true count from index
+    // return continuous agg_flag=true count from index
     size_t continuous_agg_count(uint64_t index);
 
 private:
@@ -155,7 +155,7 @@ public:
               _order(order),
               _seq_col_idx(seq_col_idx),
               _num_key_columns(_iter->schema().num_key_columns()),
-              _key_group_cluster_key_idxes(key_group_cluster_key_idxes) {}
+              _key_group_cluster_key_idxes(std::move(key_group_cluster_key_idxes)) {}
 
     VerticalMergeIteratorContext(const VerticalMergeIteratorContext&) = delete;
     VerticalMergeIteratorContext(VerticalMergeIteratorContext&&) = delete;
@@ -164,7 +164,7 @@ public:
 
     ~VerticalMergeIteratorContext() = default;
     Status block_reset(const std::shared_ptr<Block>& block);
-    Status init(const StorageReadOptions& opts);
+    Status init(const StorageReadOptions& opts, CompactionSampleInfo* sample_info = nullptr);
     bool compare(const VerticalMergeIteratorContext& rhs) const;
     Status copy_rows(Block* block, bool advanced = true);
     Status copy_rows(Block* block, size_t count);
@@ -200,6 +200,22 @@ public:
         return _block_row_locations[_index_in_block];
     }
 
+    size_t bytes() {
+        if (_block) {
+            return _block->bytes();
+        } else {
+            return 0;
+        }
+    }
+
+    size_t rows() {
+        if (_block) {
+            return _block->rows();
+        } else {
+            return 0;
+        }
+    }
+
 private:
     // Load next block into _block
     Status _load_next_block();
@@ -209,7 +225,7 @@ private:
     size_t _ori_return_cols = 0;
 
     // segment order, used to compare key
-    uint32_t _order = 0;
+    const uint32_t _order = 0;
 
     int32_t _seq_col_idx = -1;
 
@@ -243,23 +259,19 @@ public:
                               RowSourcesBuffer* row_sources_buf,
                               std::vector<uint32_t> key_group_cluster_key_idxes)
             : _origin_iters(std::move(iters)),
-              _iterator_init_flags(iterator_init_flags),
-              _rowset_ids(rowset_ids),
+              _iterator_init_flags(std::move(iterator_init_flags)),
+              _rowset_ids(std::move(rowset_ids)),
               _ori_return_cols(ori_return_cols),
               _keys_type(keys_type),
               _seq_col_idx(seq_col_idx),
               _row_sources_buf(row_sources_buf),
-              _key_group_cluster_key_idxes(key_group_cluster_key_idxes) {}
+              _key_group_cluster_key_idxes(std::move(key_group_cluster_key_idxes)) {}
 
-    ~VerticalHeapMergeIterator() override {
-        while (!_merge_heap.empty()) {
-            auto ctx = _merge_heap.top();
-            _merge_heap.pop();
-            delete ctx;
-        }
-    }
+    ~VerticalHeapMergeIterator() override = default;
+    VerticalHeapMergeIterator(const VerticalHeapMergeIterator&) = delete;
+    VerticalHeapMergeIterator& operator=(const VerticalHeapMergeIterator&) = delete;
 
-    Status init(const StorageReadOptions& opts) override;
+    Status init(const StorageReadOptions& opts, CompactionSampleInfo* sample_info) override;
     Status next_batch(Block* block) override;
     const Schema& schema() const override { return *_schema; }
     uint64_t merged_rows() const override { return _merged_rows; }
@@ -292,7 +304,7 @@ private:
                                            VerticalMergeContextComparator>;
 
     VMergeHeap _merge_heap;
-    std::vector<VerticalMergeIteratorContext*> _ori_iter_ctx;
+    std::vector<std::unique_ptr<VerticalMergeIteratorContext>> _ori_iter_ctx;
     int _block_row_max = 0;
     KeysType _keys_type;
     int32_t _seq_col_idx = -1;
@@ -314,16 +326,18 @@ public:
                               KeysType keys_type, int32_t seq_col_idx,
                               RowSourcesBuffer* row_sources_buf)
             : _origin_iters(std::move(iters)),
-              _iterator_init_flags(iterator_init_flags),
-              _rowset_ids(rowset_ids),
+              _iterator_init_flags(std::move(iterator_init_flags)),
+              _rowset_ids(std::move(rowset_ids)),
               _ori_return_cols(ori_return_cols),
               _keys_type(keys_type),
               _seq_col_idx(seq_col_idx),
               _row_sources_buf(row_sources_buf) {}
 
     ~VerticalFifoMergeIterator() override = default;
+    VerticalFifoMergeIterator(const VerticalFifoMergeIterator&) = delete;
+    VerticalFifoMergeIterator& operator=(const VerticalFifoMergeIterator&) = delete;
 
-    Status init(const StorageReadOptions& opts) override;
+    Status init(const StorageReadOptions& opts, CompactionSampleInfo* sample_info) override;
     Status next_batch(Block* block) override;
     const Schema& schema() const override { return *_schema; }
     uint64_t merged_rows() const override { return _merged_rows; }
@@ -365,13 +379,11 @@ public:
               _ori_return_cols(ori_return_cols),
               _row_sources_buf(row_sources_buf) {}
 
-    ~VerticalMaskMergeIterator() override {
-        for (auto iter : _origin_iter_ctx) {
-            delete iter;
-        }
-    }
+    ~VerticalMaskMergeIterator() override = default;
+    VerticalMaskMergeIterator(const VerticalMaskMergeIterator&) = delete;
+    VerticalMaskMergeIterator& operator=(const VerticalMaskMergeIterator&) = delete;
 
-    Status init(const StorageReadOptions& opts) override;
+    Status init(const StorageReadOptions& opts, CompactionSampleInfo* sample_info) override;
 
     Status next_batch(Block* block) override;
 
@@ -392,7 +404,7 @@ private:
     std::vector<RowwiseIteratorUPtr> _origin_iters;
     size_t _ori_return_cols = 0;
 
-    std::vector<VerticalMergeIteratorContext*> _origin_iter_ctx;
+    std::vector<std::unique_ptr<VerticalMergeIteratorContext>> _origin_iter_ctx;
 
     const Schema* _schema = nullptr;
 
@@ -400,6 +412,7 @@ private:
     size_t _filtered_rows = 0;
     RowSourcesBuffer* _row_sources_buf;
     StorageReadOptions _opts;
+    CompactionSampleInfo* _sample_info = nullptr;
 };
 
 // segment merge iterator

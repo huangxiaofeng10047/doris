@@ -35,8 +35,10 @@ import java.util.HashSet;
 import java.util.Set;
 
 class RankTest extends TestWithFeService {
+
     @Test
-    void test() {
+    void test() throws Exception {
+        createDatabase("test");
         HyperGraphBuilder hyperGraphBuilder = new HyperGraphBuilder(Sets.newHashSet(JoinType.INNER_JOIN));
         hyperGraphBuilder.init(0, 1, 2);
         Plan plan = hyperGraphBuilder
@@ -45,7 +47,7 @@ class RankTest extends TestWithFeService {
                 .buildPlan();
         plan = new LogicalProject(plan.getOutput(), plan);
         CascadesContext cascadesContext = MemoTestUtils.createCascadesContext(connectContext, plan);
-        hyperGraphBuilder.initStats(cascadesContext);
+        hyperGraphBuilder.initStats("test", cascadesContext);
         PhysicalPlan bestPlan = PlanChecker.from(cascadesContext)
                 .optimize()
                 .getBestPlanTree();
@@ -55,7 +57,7 @@ class RankTest extends TestWithFeService {
             shape.add(memo.unrank(memo.rank(i + 1).first).shape(""));
         }
         System.out.println(shape);
-        Assertions.assertEquals(1, shape.size());
+        Assertions.assertEquals(2, shape.size());
         Assertions.assertEquals(bestPlan.shape(""), memo.unrank(memo.rank(1).first).shape(""));
     }
 }

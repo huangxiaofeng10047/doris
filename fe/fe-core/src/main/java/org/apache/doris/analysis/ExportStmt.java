@@ -63,6 +63,8 @@ import java.util.stream.Collectors;
 public class ExportStmt extends StatementBase {
     public static final String PARALLELISM = "parallelism";
     public static final String LABEL = "label";
+    public static final String DATA_CONSISTENCY = "data_consistency";
+    public static final String COMPRESS_TYPE = "compress_type";
 
     private static final String DEFAULT_COLUMN_SEPARATOR = "\t";
     private static final String DEFAULT_LINE_DELIMITER = "\n";
@@ -72,6 +74,7 @@ public class ExportStmt extends StatementBase {
     private static final ImmutableSet<String> PROPERTIES_SET = new ImmutableSet.Builder<String>()
             .add(LABEL)
             .add(PARALLELISM)
+            .add(DATA_CONSISTENCY)
             .add(LoadStmt.KEY_IN_PARAM_COLUMNS)
             .add(OutFileClause.PROP_MAX_FILE_SIZE)
             .add(OutFileClause.PROP_DELETE_EXISTING_FILES)
@@ -79,6 +82,7 @@ public class ExportStmt extends StatementBase {
             .add(PropertyAnalyzer.PROPERTIES_LINE_DELIMITER)
             .add(PropertyAnalyzer.PROPERTIES_TIMEOUT)
             .add("format")
+            .add(COMPRESS_TYPE)
             .build();
 
     private TableName tblName;
@@ -103,6 +107,9 @@ public class ExportStmt extends StatementBase {
 
     private String maxFileSize;
     private String deleteExistingFiles;
+    private String withBom;
+    private String dataConsistency = ExportJob.CONSISTENT_PARTITION;
+    private String compressionType;
     private SessionVariable sessionVariables;
 
     private String qualifiedUser;
@@ -124,9 +131,12 @@ public class ExportStmt extends StatementBase {
         this.lineDelimiter = DEFAULT_LINE_DELIMITER;
         this.timeout = DEFAULT_TIMEOUT;
 
-        Optional<SessionVariable> optionalSessionVariable = Optional.ofNullable(
-                ConnectContext.get().getSessionVariable());
-        this.sessionVariables = optionalSessionVariable.orElse(VariableMgr.getDefaultSessionVariable());
+        // ConnectionContext may not exist when in replay thread
+        if (ConnectContext.get() != null) {
+            this.sessionVariables = VariableMgr.cloneSessionVariable(ConnectContext.get().getSessionVariable());
+        } else {
+            this.sessionVariables = VariableMgr.cloneSessionVariable(VariableMgr.getDefaultSessionVariable());
+        }
     }
 
     @Override
@@ -158,13 +168,13 @@ public class ExportStmt extends StatementBase {
         }
 
         // check auth
-        if (!Env.getCurrentEnv().getAccessManager().checkTblPriv(ConnectContext.get(),
-                                                                tblName.getDb(), tblName.getTbl(),
-                                                                PrivPredicate.SELECT)) {
+        if (!Env.getCurrentEnv().getAccessManager().checkTblPriv(ConnectContext.get(), tblName.getCtl(),
+                tblName.getDb(), tblName.getTbl(),
+                PrivPredicate.SELECT)) {
             ErrorReport.reportAnalysisException(ErrorCode.ERR_TABLEACCESS_DENIED_ERROR, "EXPORT",
-                                                ConnectContext.get().getQualifiedUser(),
-                                                ConnectContext.get().getRemoteIP(),
-                                                tblName.getDb() + ": " + tblName.getTbl());
+                    ConnectContext.get().getQualifiedUser(),
+                    ConnectContext.get().getRemoteIP(),
+                    tblName.getDb() + ": " + tblName.getTbl());
         }
         qualifiedUser = ConnectContext.get().getQualifiedUser();
         userIdentity = ConnectContext.get().getCurrentUserIdentity();
@@ -178,7 +188,7 @@ public class ExportStmt extends StatementBase {
         }
 
         // check path is valid
-        StorageBackend.checkPath(path, brokerDesc.getStorageType());
+        StorageBackend.checkPath(path, brokerDesc.getStorageType(), null);
         if (brokerDesc.getStorageType() == StorageBackend.StorageType.BROKER) {
             BrokerMgr brokerMgr = analyzer.getEnv().getBrokerMgr();
             if (!brokerMgr.containsBroker(brokerDesc.getName())) {
@@ -225,6 +235,9 @@ public class ExportStmt extends StatementBase {
         exportJob.setParallelism(this.parallelism);
         exportJob.setMaxFileSize(this.maxFileSize);
         exportJob.setDeleteExistingFiles(this.deleteExistingFiles);
+        exportJob.setWithBom(this.withBom);
+        exportJob.setDataConsistency(this.dataConsistency);
+        exportJob.setCompressType(this.compressionType);
 
         if (columns != null) {
             Splitter split = Splitter.on(',').trimResults().omitEmptyStrings();
@@ -261,7 +274,7 @@ public class ExportStmt extends StatementBase {
         table.readLock();
         try {
             // check table
-            if (!table.isPartitioned()) {
+            if (!table.isPartitionedTable()) {
                 throw new AnalysisException("Table[" + tblName.getTbl() + "] is not partitioned.");
             }
             Table.TableType tblType = table.getType();
@@ -351,6 +364,25 @@ public class ExportStmt extends StatementBase {
             // generate a random label
             this.label = "export_" + UUID.randomUUID();
         }
+
+        // with bom
+        this.withBom = properties.getOrDefault(OutFileClause.PROP_WITH_BOM, "false");
+
+        // data consistency
+        if (properties.containsKey(DATA_CONSISTENCY)) {
+            String dataConsistencyStr = properties.get(DATA_CONSISTENCY);
+            if (ExportJob.CONSISTENT_NONE.equalsIgnoreCase(dataConsistencyStr)) {
+                this.dataConsistency = ExportJob.CONSISTENT_NONE;
+            } else if (ExportJob.CONSISTENT_PARTITION.equalsIgnoreCase(dataConsistencyStr)) {
+                this.dataConsistency = ExportJob.CONSISTENT_PARTITION;
+            } else {
+                throw new AnalysisException("The value of data_consistency is invalid, please use `"
+                        + ExportJob.CONSISTENT_PARTITION + "`/`" + ExportJob.CONSISTENT_NONE + "`");
+            }
+        }
+
+        // compress_type
+        this.compressionType = properties.getOrDefault(COMPRESS_TYPE, "");
     }
 
     private void checkColumns() throws DdlException {

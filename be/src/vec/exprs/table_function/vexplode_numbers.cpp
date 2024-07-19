@@ -76,37 +76,35 @@ Status VExplodeNumbersTableFunction::process_init(Block* block, RuntimeState* st
     return Status::OK();
 }
 
-Status VExplodeNumbersTableFunction::process_row(size_t row_idx) {
-    RETURN_IF_ERROR(TableFunction::process_row(row_idx));
+void VExplodeNumbersTableFunction::process_row(size_t row_idx) {
+    TableFunction::process_row(row_idx);
     if (_is_const) {
-        return Status::OK();
+        return;
     }
 
     StringRef value = _value_column->get_data_at(row_idx);
     if (value.data != nullptr) {
         _cur_size = std::max(0, *reinterpret_cast<const int*>(value.data));
     }
-    return Status::OK();
 }
 
-Status VExplodeNumbersTableFunction::process_close() {
+void VExplodeNumbersTableFunction::process_close() {
     _value_column = nullptr;
-    return Status::OK();
 }
 
-void VExplodeNumbersTableFunction::get_value(MutableColumnPtr& column) {
+void VExplodeNumbersTableFunction::get_same_many_values(MutableColumnPtr& column, int length) {
     if (current_empty()) {
-        column->insert_default();
+        column->insert_many_defaults(length);
     } else {
         if (_is_nullable) {
             assert_cast<ColumnInt32*>(
                     assert_cast<ColumnNullable*>(column.get())->get_nested_column_ptr().get())
-                    ->insert_value(_cur_offset);
+                    ->insert_many_vals(_cur_offset, length);
             assert_cast<ColumnUInt8*>(
                     assert_cast<ColumnNullable*>(column.get())->get_null_map_column_ptr().get())
-                    ->insert_default();
+                    ->insert_many_defaults(length);
         } else {
-            assert_cast<ColumnInt32*>(column.get())->insert_value(_cur_offset);
+            assert_cast<ColumnInt32*>(column.get())->insert_many_vals(_cur_offset, length);
         }
     }
 }

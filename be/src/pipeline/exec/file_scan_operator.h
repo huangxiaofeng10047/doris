@@ -25,12 +25,10 @@
 #include "common/status.h"
 #include "operator.h"
 #include "pipeline/exec/scan_operator.h"
-#include "pipeline/pipeline_x/operator.h"
 #include "vec/exec/format/format_common.h"
-#include "vec/exec/scan/vscan_node.h"
+#include "vec/exec/scan/split_source_connector.h"
 
 namespace doris {
-class ExecNode;
 namespace vectorized {
 class VFileScanner;
 } // namespace vectorized
@@ -49,7 +47,7 @@ public:
 
     Status init(RuntimeState* state, LocalStateInfo& info) override;
 
-    Status _process_conjuncts() override;
+    Status _process_conjuncts(RuntimeState* state) override;
     Status _init_scanners(std::list<vectorized::VScannerSPtr>* scanners) override;
     void set_scan_ranges(RuntimeState* state,
                          const std::vector<TScanRangeParams>& scan_ranges) override;
@@ -57,7 +55,8 @@ public:
     std::string name_suffix() const override;
 
 private:
-    std::vector<TScanRangeParams> _scan_ranges;
+    std::shared_ptr<vectorized::SplitSourceConnector> _split_source = nullptr;
+    int _max_scanners;
     // A in memory cache to save some common components
     // of the this scan node. eg:
     // 1. iceberg delete file
@@ -70,14 +69,16 @@ private:
 class FileScanOperatorX final : public ScanOperatorX<FileScanLocalState> {
 public:
     FileScanOperatorX(ObjectPool* pool, const TPlanNode& tnode, int operator_id,
-                      const DescriptorTbl& descs)
-            : ScanOperatorX<FileScanLocalState>(pool, tnode, operator_id, descs),
+                      const DescriptorTbl& descs, int parallel_tasks)
+            : ScanOperatorX<FileScanLocalState>(pool, tnode, operator_id, descs, parallel_tasks),
               _table_name(tnode.file_scan_node.__isset.table_name ? tnode.file_scan_node.table_name
                                                                   : "") {
         _output_tuple_id = tnode.file_scan_node.tuple_id;
     }
 
     Status prepare(RuntimeState* state) override;
+
+    bool is_file_scan_operator() const override { return true; }
 
 private:
     friend class FileScanLocalState;

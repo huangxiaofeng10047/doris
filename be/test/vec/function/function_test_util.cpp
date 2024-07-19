@@ -30,6 +30,8 @@
 #include "vec/data_types/data_type_date.h"
 #include "vec/data_types/data_type_date_time.h"
 #include "vec/data_types/data_type_decimal.h"
+#include "vec/data_types/data_type_ipv4.h"
+#include "vec/data_types/data_type_ipv6.h"
 #include "vec/data_types/data_type_jsonb.h"
 #include "vec/data_types/data_type_string.h"
 #include "vec/data_types/data_type_time_v2.h"
@@ -98,6 +100,14 @@ size_t type_index_to_data_type(const std::vector<AnyType>& input_types, size_t i
         desc.type = doris::PrimitiveType::TYPE_OBJECT;
         type = std::make_shared<DataTypeBitMap>();
         return 1;
+    case TypeIndex::IPv4:
+        desc.type = doris::PrimitiveType::TYPE_IPV4;
+        type = std::make_shared<DataTypeIPv4>();
+        return 1;
+    case TypeIndex::IPv6:
+        desc.type = doris::PrimitiveType::TYPE_IPV6;
+        type = std::make_shared<DataTypeIPv6>();
+        return 1;
     case TypeIndex::UInt8:
         desc.type = doris::PrimitiveType::TYPE_BOOLEAN;
         type = std::make_shared<DataTypeUInt8>();
@@ -130,9 +140,9 @@ size_t type_index_to_data_type(const std::vector<AnyType>& input_types, size_t i
         desc.type = doris::PrimitiveType::TYPE_DOUBLE;
         type = std::make_shared<DataTypeFloat64>();
         return 1;
-    case TypeIndex::Decimal128:
+    case TypeIndex::Decimal128V2:
         desc.type = doris::PrimitiveType::TYPE_DECIMALV2;
-        type = std::make_shared<DataTypeDecimal<Decimal128>>();
+        type = std::make_shared<DataTypeDecimal<Decimal128V2>>();
         return 1;
     case TypeIndex::DateTime:
         desc.type = doris::PrimitiveType::TYPE_DATETIME;
@@ -242,6 +252,12 @@ bool insert_cell(MutableColumnPtr& column, DataTypePtr type_ptr, const AnyType& 
     } else if (type.idx == TypeIndex::BitMap) {
         BitmapValue* bitmap = any_cast<BitmapValue*>(cell);
         column->insert_data((char*)bitmap, sizeof(BitmapValue));
+    } else if (type.is_ipv4()) {
+        auto value = any_cast<ut_type::IPV4>(cell);
+        column->insert_data(reinterpret_cast<char*>(&value), 0);
+    } else if (type.is_ipv6()) {
+        auto value = any_cast<ut_type::IPV6>(cell);
+        column->insert_data(reinterpret_cast<char*>(&value), 0);
     } else if (type.is_uint8()) {
         auto value = any_cast<ut_type::BOOLEAN>(cell);
         column->insert_data(reinterpret_cast<char*>(&value), 0);
@@ -266,7 +282,7 @@ bool insert_cell(MutableColumnPtr& column, DataTypePtr type_ptr, const AnyType& 
     } else if (type.is_float64()) {
         auto value = any_cast<ut_type::DOUBLE>(cell);
         column->insert_data(reinterpret_cast<char*>(&value), 0);
-    } else if (type.is_decimal128()) {
+    } else if (type.is_decimal128v2()) {
         auto value = any_cast<Decimal<Int128>>(cell);
         column->insert_data(reinterpret_cast<char*>(&value), 0);
     } else if (type.is_date_time()) {
@@ -356,10 +372,7 @@ Block* process_table_function(TableFunction* fn, Block* input_block,
 
     // process table function for all rows
     for (size_t row = 0; row < input_block->rows(); ++row) {
-        if (fn->process_row(row) != Status::OK()) {
-            LOG(WARNING) << "TableFunction process_row failed";
-            return nullptr;
-        }
+        fn->process_row(row);
 
         // consider outer
         if (!fn->is_outer() && fn->current_empty()) {
@@ -367,8 +380,8 @@ Block* process_table_function(TableFunction* fn, Block* input_block,
         }
 
         do {
-            fn->get_value(column);
-            static_cast<void>(fn->forward());
+            fn->get_same_many_values(column, 1);
+            fn->forward();
         } while (!fn->eos());
     }
 

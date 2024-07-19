@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "common/status.h"
+#include "exec/decompressor.h"
 #include "exec/line_reader.h"
 #include "exprs/json_functions.h"
 #include "io/file_factory.h"
@@ -94,6 +95,9 @@ public:
     Status get_parsed_schema(std::vector<std::string>* col_names,
                              std::vector<TypeDescriptor>* col_types) override;
 
+protected:
+    void _collect_profile_before_close() override;
+
 private:
     Status _get_range_params();
     void _init_system_properties();
@@ -147,13 +151,24 @@ private:
                            bool* is_empty_row);
     Status _judge_empty_row(size_t size, bool eof, bool* is_empty_row);
 
+    Status _handle_simdjson_error(simdjson::simdjson_error& error, Block& block, size_t num_rows,
+                                  bool* eof);
+
     Status _simdjson_handle_simple_json(RuntimeState* state, Block& block,
                                         const std::vector<SlotDescriptor*>& slot_descs,
                                         bool* is_empty_row, bool* eof);
 
+    Status _simdjson_handle_simple_json_write_columns(
+            Block& block, const std::vector<SlotDescriptor*>& slot_descs, bool* is_empty_row,
+            bool* eof);
+
     Status _simdjson_handle_flat_array_complex_json(RuntimeState* state, Block& block,
                                                     const std::vector<SlotDescriptor*>& slot_descs,
                                                     bool* is_empty_row, bool* eof);
+
+    Status _simdjson_handle_flat_array_complex_json_write_columns(
+            Block& block, const std::vector<SlotDescriptor*>& slot_descs, bool* is_empty_row,
+            bool* eof);
 
     Status _simdjson_handle_nested_complex_json(RuntimeState* state, Block& block,
                                                 const std::vector<SlotDescriptor*>& slot_descs,
@@ -194,10 +209,11 @@ private:
     io::FileDescription _file_description;
     const std::vector<SlotDescriptor*>& _file_slot_descs;
 
-    std::shared_ptr<io::FileSystem> _file_system;
     io::FileReaderSPtr _file_reader;
     std::unique_ptr<LineReader> _line_reader;
     bool _reader_eof;
+    std::unique_ptr<Decompressor> _decompressor;
+    TFileCompressType::type _file_compress_type;
 
     // When we fetch range doesn't start from 0 will always skip the first line
     bool _skip_first_line;

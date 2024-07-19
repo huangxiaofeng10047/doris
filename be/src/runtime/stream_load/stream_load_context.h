@@ -118,10 +118,12 @@ public:
     // also print the load source info if detail is set to true
     std::string brief(bool detail = false) const;
 
+    bool is_mow_table() const;
+
 public:
     static const int default_txn_id = -1;
     // load type, eg: ROUTINE LOAD/MANUAL LOAD
-    TLoadType::type load_type;
+    TLoadType::type load_type = TLoadType::type::MANUL_LOAD;
     // load data source: eg: KAFKA/RAW
     TLoadSourceType::type load_src_type;
 
@@ -139,6 +141,7 @@ public:
     int64_t table_id = -1;
     int64_t schema_version = -1;
     std::string label;
+    std::string sql_str;
     // optional
     std::string sub_label;
     double max_filter_ratio = 0.0;
@@ -207,6 +210,8 @@ public:
     int64_t pre_commit_txn_cost_nanos = 0;
     int64_t read_data_cost_nanos = 0;
     int64_t write_data_cost_nanos = 0;
+    int64_t receive_and_read_data_cost_nanos = 0;
+    int64_t begin_receive_and_read_data_cost_nanos = 0;
 
     std::string error_url = "";
     // if label already be used, set existing job's status here
@@ -230,6 +235,12 @@ public:
 
     // for single-stream-multi-table, we have table list
     std::vector<std::string> table_list;
+
+    bool memtable_on_sink_node = false;
+
+    // use for cloud cluster mode
+    std::string qualified_user;
+    std::string cloud_cluster;
 
 public:
     ExecEnv* exec_env() { return _exec_env; }

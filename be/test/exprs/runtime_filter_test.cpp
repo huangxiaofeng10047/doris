@@ -35,13 +35,7 @@ TTypeDesc create_type_desc(PrimitiveType type, int precision, int scale);
 class RuntimeFilterTest : public testing::Test {
 public:
     RuntimeFilterTest() {}
-    virtual void SetUp() {
-        ExecEnv* exec_env = ExecEnv::GetInstance();
-        exec_env = nullptr;
-        _runtime_stat =
-                RuntimeState::create_unique(_fragment_id, _query_options, _query_globals, exec_env);
-        _runtime_stat->init_mem_trackers();
-    }
+    virtual void SetUp() {}
     virtual void TearDown() { _obj_pool.clear(); }
 
 private:
@@ -103,8 +97,9 @@ IRuntimeFilter* create_runtime_filter(TRuntimeFilterType::type type, TQueryOptio
     }
 
     IRuntimeFilter* runtime_filter = nullptr;
-    Status status = IRuntimeFilter::create(_runtime_stat, _obj_pool, &desc, options,
-                                           RuntimeFilterRole::PRODUCER, -1, &runtime_filter);
+    Status status = IRuntimeFilter::create(RuntimeFilterParamsContext::create(_runtime_stat),
+                                           _obj_pool, &desc, options, RuntimeFilterRole::PRODUCER,
+                                           -1, &runtime_filter);
 
     EXPECT_TRUE(status.ok()) << status.to_string();
 

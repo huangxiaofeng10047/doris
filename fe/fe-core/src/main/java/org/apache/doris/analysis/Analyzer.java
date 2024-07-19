@@ -32,14 +32,15 @@ import org.apache.doris.catalog.TableIf;
 import org.apache.doris.catalog.TableIf.TableType;
 import org.apache.doris.catalog.Type;
 import org.apache.doris.catalog.View;
-import org.apache.doris.catalog.external.HMSExternalTable;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.Config;
 import org.apache.doris.common.ErrorCode;
 import org.apache.doris.common.ErrorReport;
 import org.apache.doris.common.IdGenerator;
 import org.apache.doris.common.Pair;
+import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.TimeUtils;
+import org.apache.doris.datasource.hive.HMSExternalTable;
 import org.apache.doris.planner.AggregationNode;
 import org.apache.doris.planner.AnalyticEvalNode;
 import org.apache.doris.planner.PlanNode;
@@ -47,13 +48,16 @@ import org.apache.doris.planner.RuntimeFilter;
 import org.apache.doris.qe.ConnectContext;
 import org.apache.doris.qe.SessionVariable;
 import org.apache.doris.rewrite.BetweenToCompoundRule;
+import org.apache.doris.rewrite.CaseWhenToIf;
 import org.apache.doris.rewrite.CompoundPredicateWriteRule;
+import org.apache.doris.rewrite.ElementAtToSlotRefRule;
 import org.apache.doris.rewrite.EliminateUnnecessaryFunctions;
 import org.apache.doris.rewrite.EraseRedundantCastExpr;
 import org.apache.doris.rewrite.ExprRewriteRule;
 import org.apache.doris.rewrite.ExprRewriter;
 import org.apache.doris.rewrite.ExtractCommonFactorsRule;
 import org.apache.doris.rewrite.FoldConstantsRule;
+import org.apache.doris.rewrite.FunctionAlias;
 import org.apache.doris.rewrite.InferFiltersRule;
 import org.apache.doris.rewrite.MatchPredicateRule;
 import org.apache.doris.rewrite.NormalizeBinaryPredicatesRule;
@@ -149,9 +153,11 @@ public class Analyzer {
     // map from tuple id to the current output column index
     private final Map<TupleId, Integer> currentOutputColumn = Maps.newHashMap();
     // used for Information Schema Table Scan
-    private String schemaDb;
+    // This 3 fields is used for optimize the data fetching from FE,
+    // for stmt such as `show columns like`, `show databases like`, `show tables like`
+    // if can pre-filter the data in FrontendServiceImpl to reduce the data fetching from FE.
     private String schemaCatalog;
-    private String schemaWild;
+    private String schemaDb;
     private String schemaTable; // table used in DESCRIBE Table
 
     // Current depth of nested analyze() calls. Used for enforcing a
@@ -185,6 +191,8 @@ public class Analyzer {
     private final List<RuntimeFilter> assignedRuntimeFilters = new ArrayList<>();
 
     private boolean isReAnalyze = false;
+
+    private boolean isReplay = false;
 
     public void setIsSubquery() {
         isSubquery = true;
@@ -258,6 +266,14 @@ public class Analyzer {
 
     public long getAutoBroadcastJoinThreshold() {
         return globalState.autoBroadcastJoinThreshold;
+    }
+
+    public void setReplay() {
+        isReplay = true;
+    }
+
+    public boolean isReplay() {
+        return isReplay;
     }
 
     private static class InferPredicateState {
@@ -453,6 +469,9 @@ public class Analyzer {
             rules.add(RewriteIsNullIsNotNullRule.INSTANCE);
             rules.add(MatchPredicateRule.INSTANCE);
             rules.add(EliminateUnnecessaryFunctions.INSTANCE);
+            rules.add(ElementAtToSlotRefRule.INSTANCE);
+            rules.add(FunctionAlias.INSTANCE);
+            rules.add(CaseWhenToIf.INSTANCE);
             List<ExprRewriteRule> onceRules = Lists.newArrayList();
             onceRules.add(ExtractCommonFactorsRule.INSTANCE);
             onceRules.add(InferFiltersRule.INSTANCE);
@@ -599,6 +618,14 @@ public class Analyzer {
         return callDepth;
     }
 
+    public void setPrepareStmt(PrepareStmt stmt) {
+        prepareStmt = stmt;
+    }
+
+    public PrepareStmt getPrepareStmt() {
+        return prepareStmt;
+    }
+
     public void setInlineView(boolean inlineView) {
         isInlineView = inlineView;
     }
@@ -609,14 +636,6 @@ public class Analyzer {
 
     public void setExplicitViewAlias(String alias) {
         explicitViewAlias = alias;
-    }
-
-    public void setPrepareStmt(PrepareStmt stmt) {
-        prepareStmt = stmt;
-    }
-
-    public PrepareStmt getPrepareStmt() {
-        return prepareStmt;
     }
 
     public String getExplicitViewAlias() {
@@ -654,7 +673,7 @@ public class Analyzer {
         Calendar currentDate = Calendar.getInstance();
         LocalDateTime localDateTime = LocalDateTime.ofInstant(currentDate.toInstant(),
                 currentDate.getTimeZone().toZoneId());
-        String nowStr = localDateTime.format(TimeUtils.DATETIME_NS_FORMAT);
+        String nowStr = localDateTime.format(TimeUtils.getDatetimeNsFormatWithTimeZone());
         queryGlobals.setNowString(nowStr);
         queryGlobals.setNanoSeconds(LocalDateTime.now().getNano());
         return queryGlobals;
@@ -822,7 +841,7 @@ public class Analyzer {
                 .getDbOrAnalysisException(tableName.getDb());
         TableIf table = database.getTableOrAnalysisException(tableName.getTbl());
 
-        if (table.getType() == TableType.OLAP && (((OlapTable) table).getState() == OlapTableState.RESTORE
+        if (table.isManagedTable() && (((OlapTable) table).getState() == OlapTableState.RESTORE
                 || ((OlapTable) table).getState() == OlapTableState.RESTORE_WITH_LOAD)) {
             Boolean isNotRestoring = ((OlapTable) table).getPartitions().stream()
                     .filter(partition -> partition.getState() == PartitionState.RESTORE).collect(Collectors.toList())
@@ -852,6 +871,13 @@ public class Analyzer {
                     View hmsView = new View(table.getId(), table.getName(), table.getFullSchema());
                     hmsView.setInlineViewDefWithSqlMode(((HMSExternalTable) table).getViewText(),
                             ConnectContext.get().getSessionVariable().getSqlMode());
+                    // for user experience consideration, parse hive view ddl first to avoid NPE
+                    // if legacy parser can not parse hive view ddl properly
+                    try {
+                        hmsView.init();
+                    } catch (UserException e) {
+                        throw new AnalysisException(e.getMessage(), e);
+                    }
                     InlineViewRef inlineViewRef = new InlineViewRef(hmsView, tableRef);
                     if (StringUtils.isNotEmpty(tableName.getCtl())) {
                         inlineViewRef.setExternalCtl(tableName.getCtl());
@@ -1011,8 +1037,15 @@ public class Analyzer {
                                                 newTblName == null ? d.getTable().getName() : newTblName.toString());
         }
 
-        LOG.debug("register column ref table {}, colName {}, col {}", tblName, colName, col.toSql());
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("register column ref table {}, colName {}, col {}", tblName, colName, col.toSql());
+        }
         if (col.getType().isVariantType() || (subColNames != null && !subColNames.isEmpty())) {
+            if (getContext() != null && !getContext().getSessionVariable().enableVariantAccessInOriginalPlanner
+                    && (subColNames != null && !subColNames.isEmpty())) {
+                ErrorReport.reportAnalysisException("Variant sub-column access is disabled in original planner,"
+                        + "set enable_variant_access_in_original_planner = true in session variable");
+            }
             if (!col.getType().isVariantType()) {
                 ErrorReport.reportAnalysisException(ErrorCode.ERR_ILLEGAL_COLUMN_REFERENCE_ERROR,
                         Joiner.on(".").join(tblName.getTbl(), colName));
@@ -1044,7 +1077,9 @@ public class Analyzer {
                 return result;
             }
             result = globalState.descTbl.addSlotDescriptor(d);
-            LOG.debug("register slot descriptor {}", result);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("register slot descriptor {}", result);
+            }
             result.setSubColLables(subColNames);
             result.setColumn(col);
             if (!subColNames.isEmpty()) {
@@ -1327,6 +1362,14 @@ public class Analyzer {
     public void registerConjuncts(Expr e, boolean fromHavingClause, List<TupleId> ids) throws AnalysisException {
         for (Expr conjunct : e.getConjuncts()) {
             registerConjunct(conjunct);
+            if (!conjunct.isConstant()) {
+                ArrayList<TupleId> tupleIds = Lists.newArrayList();
+                ArrayList<SlotId> slotIds = Lists.newArrayList();
+                conjunct.getIds(tupleIds, slotIds);
+                if (tupleIds.isEmpty() && slotIds.isEmpty()) {
+                    conjunct.setBoundTupleIds(ids);
+                }
+            }
             if (ids != null) {
                 for (TupleId id : ids) {
                     registerConstantConjunct(id, conjunct);
@@ -2284,6 +2327,9 @@ public class Analyzer {
                         lastCompatibleExpr, exprLists.get(j).get(i));
                 lastCompatibleExpr = exprLists.get(j).get(i);
             }
+            if (compatibleType.isDecimalV3()) {
+                compatibleType = adjustDecimalV3PrecisionAndScale((ScalarType) compatibleType);
+            }
             // Now that we've found a compatible type, add implicit casts if necessary.
             for (int j = 0; j < exprLists.size(); ++j) {
                 if (!exprLists.get(j).get(i).getType().equals(compatibleType)) {
@@ -2292,6 +2338,21 @@ public class Analyzer {
                 }
             }
         }
+    }
+
+    private ScalarType adjustDecimalV3PrecisionAndScale(ScalarType decimalV3Type) {
+        ScalarType resultType = decimalV3Type;
+        int oldPrecision = decimalV3Type.getPrecision();
+        int oldScale = decimalV3Type.getDecimalDigits();
+        int integerPart = oldPrecision - oldScale;
+        int maxPrecision =
+                SessionVariable.getEnableDecimal256() ? ScalarType.MAX_DECIMAL256_PRECISION
+                        : ScalarType.MAX_DECIMAL128_PRECISION;
+        if (oldPrecision > maxPrecision) {
+            int newScale = maxPrecision - integerPart;
+            resultType = ScalarType.createDecimalType(maxPrecision, newScale < 0 ? 0 : newScale);
+        }
+        return resultType;
     }
 
     public long getConnectId() {
@@ -2304,10 +2365,6 @@ public class Analyzer {
 
     public String getDefaultDb() {
         return globalState.context.getDatabase();
-    }
-
-    public String getClusterName() {
-        return globalState.context.getClusterName();
     }
 
     public String getQualifiedUser() {
@@ -2340,19 +2397,14 @@ public class Analyzer {
         return globalState.context;
     }
 
-    public String getSchemaWild() {
-        return schemaWild;
-    }
-
     public TQueryGlobals getQueryGlobals() {
         return new TQueryGlobals();
     }
 
     // for Schema Table Schema like SHOW TABLES LIKE "abc%"
-    public void setSchemaInfo(String db, String table, String wild, String catalog) {
+    public void setSchemaInfo(String db, String table, String catalog) {
         schemaDb = db;
         schemaTable = table;
-        schemaWild = wild;
         schemaCatalog = catalog;
     }
 

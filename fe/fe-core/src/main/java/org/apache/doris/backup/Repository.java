@@ -24,23 +24,30 @@ import org.apache.doris.catalog.Env;
 import org.apache.doris.catalog.FsBroker;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.FeConstants;
+import org.apache.doris.common.FeMetaVersion;
 import org.apache.doris.common.Pair;
 import org.apache.doris.common.io.Text;
 import org.apache.doris.common.io.Writable;
 import org.apache.doris.common.util.PrintableMap;
 import org.apache.doris.common.util.TimeUtils;
+import org.apache.doris.datasource.property.constants.S3Properties;
+import org.apache.doris.fs.FileSystemFactory;
 import org.apache.doris.fs.PersistentFileSystem;
+import org.apache.doris.fs.remote.AzureFileSystem;
 import org.apache.doris.fs.remote.BrokerFileSystem;
 import org.apache.doris.fs.remote.RemoteFile;
 import org.apache.doris.fs.remote.RemoteFileSystem;
 import org.apache.doris.fs.remote.S3FileSystem;
 import org.apache.doris.fs.remote.dfs.DFSFileSystem;
+import org.apache.doris.persist.gson.GsonPostProcessable;
+import org.apache.doris.persist.gson.GsonUtils;
 import org.apache.doris.system.Backend;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.common.collect.Lists;
+import com.google.gson.annotations.SerializedName;
 import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -58,7 +65,10 @@ import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /*
@@ -86,7 +96,7 @@ import java.util.UUID;
  *                 * __10023_seg2.dat.DNW231dnklawd
  *                 * __10023.hdr.dnmwDDWI92dDko
  */
-public class Repository implements Writable {
+public class Repository implements Writable, GsonPostProcessable {
     public static final String PREFIX_REPO = "__palo_repository_";
     public static final String PREFIX_SNAPSHOT_DIR = "__ss_";
     public static final String PREFIX_DB = "__db_";
@@ -105,19 +115,25 @@ public class Repository implements Writable {
     private static final String PATH_DELIMITER = "/";
     private static final String CHECKSUM_SEPARATOR = ".";
 
+    @SerializedName("id")
     private long id;
+    @SerializedName("n")
     private String name;
     private String errMsg;
+    @SerializedName("ct")
     private long createTime;
 
     // If True, user can not backup data to this repo.
+    @SerializedName("iro")
     private boolean isReadOnly;
 
     // BOS location should start with "bos://your_bucket_name/"
     // and the specified bucket should exist.
+    @SerializedName("lo")
     private String location;
 
-    private RemoteFileSystem fileSystem;
+    @SerializedName("fs")
+    private PersistentFileSystem fileSystem;
 
     private Repository() {
         // for persist
@@ -139,7 +155,7 @@ public class Repository implements Writable {
             return PREFIX_JOB_INFO;
         } else {
             return PREFIX_JOB_INFO
-                    + TimeUtils.longToTimeString(createTime, TimeUtils.DATETIME_FORMAT_WITH_HYPHEN);
+                    + TimeUtils.longToTimeString(createTime, TimeUtils.getDatetimeFormatWithHyphenWithTimeZone());
         }
     }
 
@@ -179,9 +195,26 @@ public class Repository implements Writable {
     }
 
     public static Repository read(DataInput in) throws IOException {
-        Repository repo = new Repository();
-        repo.readFields(in);
-        return repo;
+        if (Env.getCurrentEnvJournalVersion() < FeMetaVersion.VERSION_137) {
+            Repository repo = new Repository();
+            repo.readFields(in);
+            return repo;
+        } else {
+            return GsonUtils.GSON.fromJson(Text.readString(in), Repository.class);
+        }
+    }
+
+    @Override
+    public void gsonPostProcess() {
+        StorageBackend.StorageType type = StorageBackend.StorageType.BROKER;
+        if (this.fileSystem.properties.containsKey(PersistentFileSystem.STORAGE_TYPE)) {
+            type = StorageBackend.StorageType.valueOf(
+                    this.fileSystem.properties.get(PersistentFileSystem.STORAGE_TYPE));
+            this.fileSystem.properties.remove(PersistentFileSystem.STORAGE_TYPE);
+        }
+        this.fileSystem = FileSystemFactory.get(this.fileSystem.getName(),
+                type,
+                this.fileSystem.getProperties());
     }
 
     public long getId() {
@@ -204,7 +237,7 @@ public class Repository implements Writable {
         return errMsg;
     }
 
-    public RemoteFileSystem getRemoteFileSystem() {
+    public PersistentFileSystem getRemoteFileSystem() {
         return fileSystem;
     }
 
@@ -222,7 +255,7 @@ public class Repository implements Writable {
         // so that we can add regression tests about backup/restore.
         //
         // TODO: support hdfs/brokers
-        if (fileSystem instanceof S3FileSystem) {
+        if (fileSystem instanceof S3FileSystem || fileSystem instanceof AzureFileSystem) {
             String deleteStaledSnapshots = fileSystem.getProperties()
                     .getOrDefault(CreateRepositoryStmt.PROP_DELETE_IF_EXISTS, "false");
             if (deleteStaledSnapshots.equalsIgnoreCase("true")) {
@@ -231,7 +264,7 @@ public class Repository implements Writable {
                 String snapshotPrefix = Joiner.on(PATH_DELIMITER).join(location, joinPrefix(PREFIX_REPO, name));
                 LOG.info("property {} is set, delete snapshots with prefix: {}",
                         CreateRepositoryStmt.PROP_DELETE_IF_EXISTS, snapshotPrefix);
-                Status st = ((S3FileSystem) fileSystem).deleteDirectory(snapshotPrefix);
+                Status st = fileSystem.deleteDirectory(snapshotPrefix);
                 if (!st.ok()) {
                     return st;
                 }
@@ -241,7 +274,7 @@ public class Repository implements Writable {
         String repoInfoFilePath = assembleRepoInfoFilePath();
         // check if the repo is already exist in remote
         List<RemoteFile> remoteFiles = Lists.newArrayList();
-        Status st = fileSystem.list(repoInfoFilePath, remoteFiles);
+        Status st = fileSystem.globList(repoInfoFilePath, remoteFiles);
         if (!st.ok()) {
             return st;
         }
@@ -262,6 +295,11 @@ public class Repository implements Writable {
                 byte[] bytes = Files.readAllBytes(Paths.get(localFilePath));
                 String json = new String(bytes, StandardCharsets.UTF_8);
                 JSONObject root = (JSONObject) JSONValue.parse(json);
+                if (name.compareTo((String) root.get("name")) != 0) {
+                    return new Status(ErrCode.COMMON_ERROR,
+                            "Invalid repository __repo_info, expected repo '" + name + "', but get name '"
+                                + (String) root.get("name") + "' from " + repoInfoFilePath);
+                }
                 name = (String) root.get("name");
                 createTime = TimeUtils.timeStringToLong((String) root.get("create_time"));
                 if (createTime == -1) {
@@ -287,6 +325,37 @@ public class Repository implements Writable {
             root.put("create_time", TimeUtils.longToTimeString(createTime));
             String repoInfoContent = root.toString();
             return fileSystem.directUpload(repoInfoContent, repoInfoFilePath);
+        }
+    }
+
+    public Status alterRepositoryS3Properties(Map<String, String> properties) {
+        if (fileSystem instanceof S3FileSystem) {
+            Map<String, String> oldProperties = new HashMap<>(this.getRemoteFileSystem().getProperties());
+            oldProperties.remove(S3Properties.ACCESS_KEY);
+            oldProperties.remove(S3Properties.SECRET_KEY);
+            oldProperties.remove(S3Properties.SESSION_TOKEN);
+            oldProperties.remove(S3Properties.Env.ACCESS_KEY);
+            oldProperties.remove(S3Properties.Env.SECRET_KEY);
+            oldProperties.remove(S3Properties.Env.TOKEN);
+            for (Map.Entry<String, String> entry : properties.entrySet()) {
+                if (Objects.equals(entry.getKey(), S3Properties.ACCESS_KEY)
+                        || Objects.equals(entry.getKey(), S3Properties.Env.ACCESS_KEY)) {
+                    oldProperties.putIfAbsent(S3Properties.ACCESS_KEY, entry.getValue());
+                }
+                if (Objects.equals(entry.getKey(), S3Properties.SECRET_KEY)
+                        || Objects.equals(entry.getKey(), S3Properties.Env.SECRET_KEY)) {
+                    oldProperties.putIfAbsent(S3Properties.SECRET_KEY, entry.getValue());
+                }
+                if (Objects.equals(entry.getKey(), S3Properties.SESSION_TOKEN)
+                        || Objects.equals(entry.getKey(), S3Properties.Env.TOKEN)) {
+                    oldProperties.putIfAbsent(S3Properties.SESSION_TOKEN, entry.getValue());
+                }
+            }
+            properties.clear();
+            properties.putAll(oldProperties);
+            return Status.OK;
+        } else {
+            return new Status(ErrCode.COMMON_ERROR, "Only support alter s3 repository");
         }
     }
 
@@ -377,14 +446,16 @@ public class Repository implements Writable {
         String listPath = Joiner.on(PATH_DELIMITER).join(location, joinPrefix(PREFIX_REPO, name), PREFIX_SNAPSHOT_DIR)
                 + "*";
         List<RemoteFile> result = Lists.newArrayList();
-        Status st = fileSystem.list(listPath, result);
+        Status st = fileSystem.globList(listPath, result);
         if (!st.ok()) {
             return st;
         }
 
         for (RemoteFile remoteFile : result) {
             if (remoteFile.isFile()) {
-                LOG.debug("get snapshot path{} which is not a dir", remoteFile);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("get snapshot path{} which is not a dir", remoteFile);
+                }
                 continue;
             }
 
@@ -413,7 +484,9 @@ public class Repository implements Writable {
                 joinPrefix(PREFIX_IDX, info.getIndexId()),
                 joinPrefix(PREFIX_COMMON, info.getTabletId()),
                 joinPrefix(PREFIX_COMMON, info.getSchemaHash()));
-        LOG.debug("get remote tablet snapshot path: {}", path);
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("get remote tablet snapshot path: {}", path);
+        }
         return path;
     }
 
@@ -488,8 +561,10 @@ public class Repository implements Writable {
         if (fileSystem instanceof BrokerFileSystem) {
             // this may be a retry, so we should first delete remote file
             String tmpRemotePath = assembleFileNameWithSuffix(remoteFilePath, SUFFIX_TMP_FILE);
-            LOG.debug("get md5sum of file: {}. tmp remote path: {}. final remote path: {}",
-                    localFilePath, tmpRemotePath, finalRemotePath);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("get md5sum of file: {}. tmp remote path: {}. final remote path: {}",
+                        localFilePath, tmpRemotePath, finalRemotePath);
+            }
             st = fileSystem.delete(tmpRemotePath);
             if (!st.ok()) {
                 return st;
@@ -511,8 +586,10 @@ public class Repository implements Writable {
             if (!st.ok()) {
                 return st;
             }
-        } else if (fileSystem instanceof S3FileSystem) {
-            LOG.debug("get md5sum of file: {}. final remote path: {}", localFilePath, finalRemotePath);
+        } else if (fileSystem instanceof S3FileSystem || fileSystem instanceof AzureFileSystem) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("get md5sum of file: {}. final remote path: {}", localFilePath, finalRemotePath);
+            }
             st = fileSystem.delete(finalRemotePath);
             if (!st.ok()) {
                 return st;
@@ -524,7 +601,9 @@ public class Repository implements Writable {
                 return st;
             }
         } else if (fileSystem instanceof DFSFileSystem) {
-            LOG.debug("hdfs get md5sum of file: {}. final remote path: {}", localFilePath, finalRemotePath);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("hdfs get md5sum of file: {}. final remote path: {}", localFilePath, finalRemotePath);
+            }
             st = fileSystem.delete(finalRemotePath);
             if (!st.ok()) {
                 return st;
@@ -545,7 +624,7 @@ public class Repository implements Writable {
     public Status download(String remoteFilePath, String localFilePath) {
         // 0. list to get to full name(with checksum)
         List<RemoteFile> remoteFiles = Lists.newArrayList();
-        Status status = fileSystem.list(remoteFilePath + "*", remoteFiles);
+        Status status = fileSystem.globList(remoteFilePath + "*", remoteFiles);
         if (!status.ok()) {
             return status;
         }
@@ -559,7 +638,9 @@ public class Repository implements Writable {
 
         String remoteFilePathWithChecksum = replaceFileNameWithChecksumFileName(remoteFilePath,
                 remoteFiles.get(0).getName());
-        LOG.debug("get download filename with checksum: " + remoteFilePathWithChecksum);
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("get download filename with checksum: " + remoteFilePathWithChecksum);
+        }
 
         // 1. get checksum from remote file name
         Pair<String, String> pair = decodeFileNameWithChecksum(remoteFilePathWithChecksum);
@@ -691,8 +772,9 @@ public class Repository implements Writable {
         stmtBuilder.append("\"");
 
         stmtBuilder.append("\nPROPERTIES\n(");
-        stmtBuilder.append(new PrintableMap<>(this.getRemoteFileSystem().getProperties(), " = ",
-                true, true, true));
+        Map<String, String> properties = new HashMap();
+        properties.putAll(this.getRemoteFileSystem().getProperties());
+        stmtBuilder.append(new PrintableMap<>(properties, " = ", true, true, true));
         stmtBuilder.append("\n)");
         return stmtBuilder.toString();
     }
@@ -703,9 +785,11 @@ public class Repository implements Writable {
             // get all timestamp
             // path eg: /location/__palo_repository_repo_name/__ss_my_snap/__info_*
             String infoFilePath = assembleJobInfoFilePath(snapshotName, -1);
-            LOG.debug("assemble infoFilePath: {}, snapshot: {}", infoFilePath, snapshotName);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("assemble infoFilePath: {}, snapshot: {}", infoFilePath, snapshotName);
+            }
             List<RemoteFile> results = Lists.newArrayList();
-            Status st = fileSystem.list(infoFilePath + "*", results);
+            Status st = fileSystem.globList(infoFilePath + "*", results);
             if (!st.ok()) {
                 info.add(snapshotName);
                 info.add(FeConstants.null_string);
@@ -780,14 +864,10 @@ public class Repository implements Writable {
 
     @Override
     public void write(DataOutput out) throws IOException {
-        out.writeLong(id);
-        Text.writeString(out, name);
-        out.writeBoolean(isReadOnly);
-        Text.writeString(out, location);
-        fileSystem.write(out);
-        out.writeLong(createTime);
+        Text.writeString(out, GsonUtils.GSON.toJson(this));
     }
 
+    @Deprecated
     public void readFields(DataInput in) throws IOException {
         id = in.readLong();
         name = Text.readString(in);

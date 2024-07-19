@@ -21,23 +21,19 @@ suite("query58") {
     String db = context.config.getDbNameByFile(new File(context.file.parent))
     sql "use ${db}"
     sql 'set enable_nereids_planner=true'
+    sql 'set enable_nereids_distribute_planner=false'
     sql 'set enable_fallback_to_original_planner=false'
     sql 'set exec_mem_limit=21G'
     sql 'set be_number_for_test=3'
-sql 'set enable_runtime_filter_prune=true'
-    sql 'set parallel_pipeline_task_num=8'
+    sql 'set parallel_fragment_exec_instance_num=8; '
+    sql 'set parallel_pipeline_task_num=8; '
     sql 'set forbid_unknown_col_stats=true'
-    sql 'set broadcast_row_count_limit = 30000000'
     sql 'set enable_nereids_timeout = false'
-    sql 'SET enable_pipeline_engine = true'
+    sql 'set runtime_filter_type=8'
+    sql 'set enable_runtime_filter_prune=true'
+    sql "set disable_nereids_rules=PRUNE_EMPTY_PARTITION"
 
-    qt_ds_shape_58 '''
-    explain shape plan
-
-
-
-
-with ss_items as
+    def ds = """with ss_items as
  (select i_item_id item_id
         ,sum(ss_ext_sales_price) ss_item_rev 
  from store_sales
@@ -98,7 +94,9 @@ with ss_items as
    and ws_item_rev between 0.9 * cs_item_rev and 1.1 * cs_item_rev
  order by item_id
          ,ss_item_rev
- limit 100;
-
-    '''
+ limit 100"""
+    qt_ds_shape_58 """
+    explain shape plan
+    ${ds}
+    """
 }

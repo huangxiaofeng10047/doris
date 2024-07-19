@@ -92,17 +92,17 @@ suite("insert_group_commit_into_unique") {
 
             // 1. insert into
             connect(user = context.config.jdbcUser, password = context.config.jdbcPassword, url = context.config.jdbcUrl) {
-                sql """ set enable_insert_group_commit = true; """
+                sql """ set group_commit = async_mode; """
                 if (item == "nereids") {
                     sql """ set enable_nereids_dml = true; """
                     sql """ set enable_nereids_planner=true; """
-                    // sql """ set enable_fallback_to_original_planner=false; """
+                    sql """ set enable_fallback_to_original_planner=false; """
                 } else {
                     sql """ set enable_nereids_dml = false; """
                 }
 
                 group_commit_insert """ insert into ${dbTableName} values (1, 'a', 10),(5, 'q', 50); """, 2
-                group_commit_insert """ insert into ${dbTableName}(id) select 6; """, 1
+                group_commit_insert """ insert into ${dbTableName}(id) values(6); """, 1
                 group_commit_insert """ insert into ${dbTableName}(id) values(4);  """, 1
                 group_commit_insert """ insert into ${dbTableName}(name, id) values('c', 3);  """, 1
                 group_commit_insert """ insert into ${dbTableName}(id, name) values(2, 'b'); """, 1
@@ -117,7 +117,7 @@ suite("insert_group_commit_into_unique") {
                 table "${tableName}"
 
                 set 'column_separator', ','
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 set 'columns', 'id, name, score'
                 file "test_group_commit_1.csv"
                 unset 'label'
@@ -135,7 +135,7 @@ suite("insert_group_commit_into_unique") {
                 table "${tableName}"
 
                 set 'column_separator', ','
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 set 'columns', 'id, name, score, __DORIS_DELETE_SIGN__'
                 file "test_group_commit_2.csv"
                 unset 'label'
@@ -146,7 +146,7 @@ suite("insert_group_commit_into_unique") {
                     checkStreamLoadResult(exception, result, 5, 5, 0, 0)
                 }
             }
-            getRowCount(10)
+            getRowCount(12)
             sql """ set show_hidden_columns = true """
             qt_sql """ select id, name, score, __DORIS_DELETE_SIGN__ from ${dbTableName} order by id, name, score asc; """
             sql """ set show_hidden_columns = false """
@@ -178,17 +178,17 @@ suite("insert_group_commit_into_unique") {
 
             // 1. insert into
             connect(user = context.config.jdbcUser, password = context.config.jdbcPassword, url = context.config.jdbcUrl) {
-                sql """ set enable_insert_group_commit = true; """
+                sql """ set group_commit = async_mode; """
                 if (item == "nereids") {
                     sql """ set enable_nereids_dml = true; """
                     sql """ set enable_nereids_planner=true; """
-                    // sql """ set enable_fallback_to_original_planner=false; """
+                    sql """ set enable_fallback_to_original_planner=false; """
                 } else {
                     sql """ set enable_nereids_dml = false; """
                 }
 
                 group_commit_insert """ insert into ${dbTableName} values (1, 'a', 10),(5, 'q', 50); """, 2
-                group_commit_insert """ insert into ${dbTableName}(id, score) select 6, 60; """, 1
+                group_commit_insert """ insert into ${dbTableName}(id, score) values(6, 60); """, 1
                 group_commit_insert """ insert into ${dbTableName}(id, score) values(4, 70);  """, 1
                 group_commit_insert """ insert into ${dbTableName}(name, id, score) values('c', 3, 30);  """, 1
                 group_commit_insert """ insert into ${dbTableName}(score, id, name) values(30, 2, 'b'); """, 1
@@ -203,7 +203,7 @@ suite("insert_group_commit_into_unique") {
                 table "${tableName}"
 
                 set 'column_separator', ','
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 set 'columns', 'id, name, score'
                 file "test_group_commit_1.csv"
                 unset 'label'
@@ -221,7 +221,7 @@ suite("insert_group_commit_into_unique") {
                 table "${tableName}"
 
                 set 'column_separator', ','
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 set 'columns', 'id, name, score, __DORIS_DELETE_SIGN__'
                 file "test_group_commit_2.csv"
                 unset 'label'
@@ -232,7 +232,7 @@ suite("insert_group_commit_into_unique") {
                     checkStreamLoadResult(exception, result, 5, 5, 0, 0)
                 }
             }
-            getRowCount(10)
+            getRowCount(12)
             sql """ set show_hidden_columns = true """
             qt_sql """ select id, name, score, __DORIS_SEQUENCE_COL__, __DORIS_DELETE_SIGN__ from ${dbTableName} order by id, name, score asc; """
             sql """ set show_hidden_columns = false """
@@ -265,17 +265,17 @@ suite("insert_group_commit_into_unique") {
 
             // 1. insert into
             connect(user = context.config.jdbcUser, password = context.config.jdbcPassword, url = context.config.jdbcUrl) {
-                sql """ set enable_insert_group_commit = true; """
+                sql """ set group_commit = async_mode; """
                 if (item == "nereids") {
                     sql """ set enable_nereids_dml = true; """
                     sql """ set enable_nereids_planner=true; """
-                    // sql """ set enable_fallback_to_original_planner=false; """
+                    sql """ set enable_fallback_to_original_planner=false; """
                 } else {
                     sql """ set enable_nereids_dml = false; """
                 }
 
                 group_commit_insert """ insert into ${dbTableName}(id, name, score, __DORIS_SEQUENCE_COL__) values (1, 'a', 10, 100),(5, 'q', 50, 500); """, 2
-                group_commit_insert """ insert into ${dbTableName}(id, score, __DORIS_SEQUENCE_COL__) select 6, 60, 600; """, 1
+                group_commit_insert """ insert into ${dbTableName}(id, score, __DORIS_SEQUENCE_COL__) values(6, 60, 600); """, 1
                 group_commit_insert """ insert into ${dbTableName}(id, score, __DORIS_SEQUENCE_COL__) values(6, 50, 500);  """, 1
                 group_commit_insert """ insert into ${dbTableName}(name, id, score, __DORIS_SEQUENCE_COL__) values('c', 3, 30, 300);  """, 1
                 group_commit_insert """ insert into ${dbTableName}(score, id, name, __DORIS_SEQUENCE_COL__) values(30, 2, 'b', 200); """, 1
@@ -291,7 +291,7 @@ suite("insert_group_commit_into_unique") {
                 table "${tableName}"
 
                 set 'column_separator', ','
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 set 'columns', 'id, name, score, __DORIS_SEQUENCE_COL__'
                 set 'function_column.sequence_col', '__DORIS_SEQUENCE_COL__'
                 file "test_group_commit_3.csv"
@@ -310,7 +310,7 @@ suite("insert_group_commit_into_unique") {
                 table "${tableName}"
 
                 set 'column_separator', ','
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 set 'columns', 'id, name, score, __DORIS_SEQUENCE_COL__, __DORIS_DELETE_SIGN__'
                 set 'function_column.sequence_col', '__DORIS_SEQUENCE_COL__'
                 file "test_group_commit_4.csv"

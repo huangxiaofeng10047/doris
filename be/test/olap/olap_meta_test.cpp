@@ -39,8 +39,10 @@ class OlapMetaTest : public testing::Test {
 public:
     virtual void SetUp() {
         _root_path = "./ut_dir/olap_meta_test";
-        EXPECT_TRUE(io::global_local_filesystem()->delete_and_create_directory(_root_path).ok());
-
+        auto st = io::global_local_filesystem()->delete_directory(_root_path);
+        ASSERT_TRUE(st.ok()) << st;
+        st = io::global_local_filesystem()->create_directory(_root_path);
+        ASSERT_TRUE(st.ok()) << st;
         _meta = new OlapMeta(_root_path);
         Status s = _meta->init();
         EXPECT_EQ(Status::OK(), s);
@@ -107,7 +109,7 @@ TEST_F(OlapMetaTest, TestIterate) {
     }
     bool error_flag = false;
     s = _meta->iterate(META_COLUMN_FAMILY_INDEX, "hdr_",
-                       [&error_flag](const std::string& key, const std::string& value) -> bool {
+                       [&error_flag](std::string_view key, std::string_view value) -> bool {
                            size_t pos = key.find_first_of("hdr_");
                            if (pos != 0) {
                                error_flag = true;

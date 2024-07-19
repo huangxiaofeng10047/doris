@@ -21,6 +21,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -48,6 +49,28 @@ static bool iequals(const std::string& a, const std::string& b) {
     return true;
 }
 
+void custom_prefix(std::ostream& s, const google::LogMessageInfo& l, void*) {
+    // Add prefix "RuntimeLogger ".
+    s << "RuntimeLogger ";
+    // Same as in fe.log
+    // The following is same as default log format. eg:
+    // I20240605 15:25:15.677153 1763151 wal_manager.cpp:481] msg...
+    s << l.severity[0];
+    s << std::setw(4) << 1900 + l.time.year();
+    s << std::setw(2) << 1 + l.time.month();
+    s << std::setw(2) << l.time.day();
+    s << ' ';
+    s << std::setw(2) << l.time.hour() << ':';
+    s << std::setw(2) << l.time.min() << ':';
+    s << std::setw(2) << l.time.sec() << ".";
+    s << std::setw(6) << l.time.usec();
+    s << ' ';
+    s << std::setfill(' ') << std::setw(5);
+    s << l.thread_id << std::setfill('0');
+    s << ' ';
+    s << l.filename << ':' << l.line_number << "]";
+}
+
 bool init_glog(const char* basename) {
     std::lock_guard<std::mutex> logging_lock(logging_mutex);
 
@@ -55,15 +78,25 @@ bool init_glog(const char* basename) {
         return true;
     }
 
-    if (getenv("DORIS_LOG_TO_STDERR") != nullptr) {
-        FLAGS_alsologtostderr = true;
+    bool log_to_console = (getenv("DORIS_LOG_TO_STDERR") != nullptr);
+    if (log_to_console) {
+        if (config::enable_file_logger) {
+            FLAGS_alsologtostderr = true;
+        } else {
+            FLAGS_logtostderr = true;
+        }
     }
 
     // don't log to stderr except fatal level
     // so fatal log can output to be.out .
     FLAGS_stderrthreshold = google::FATAL;
     // set glog log dir
-    FLAGS_log_dir = config::sys_log_dir;
+    // ATTN: sys_log_dir is deprecated, this is just for compatibility
+    std::string log_dir = config::sys_log_dir;
+    if (log_dir == "") {
+        log_dir = getenv("LOG_DIR");
+    }
+    FLAGS_log_dir = log_dir;
     // 0 means buffer INFO only
     FLAGS_logbuflevel = 0;
     // buffer log messages for at most this many seconds
@@ -130,7 +163,7 @@ bool init_glog(const char* basename) {
     }
 
     // set verbose modules.
-    FLAGS_v = -1;
+    FLAGS_v = config::sys_log_verbose_flags_v;
     std::vector<std::string>& verbose_modules = config::sys_log_verbose_modules;
     int32_t vlog_level = config::sys_log_verbose_level;
     for (size_t i = 0; i < verbose_modules.size(); i++) {
@@ -139,7 +172,12 @@ bool init_glog(const char* basename) {
         }
     }
 
-    google::InitGoogleLogging(basename);
+    if (log_to_console) {
+        // Only add prefix if log output to stderr
+        google::InitGoogleLogging(basename, &custom_prefix);
+    } else {
+        google::InitGoogleLogging(basename);
+    }
 
     logging_initialized = true;
 
@@ -149,6 +187,22 @@ bool init_glog(const char* basename) {
 void shutdown_logging() {
     std::lock_guard<std::mutex> logging_lock(logging_mutex);
     google::ShutdownGoogleLogging();
+}
+
+void update_logging(const std::string& name, const std::string& value) {
+    if ("sys_log_level" == name) {
+        if (iequals(value, "INFO")) {
+            FLAGS_minloglevel = 0;
+        } else if (iequals(value, "WARNING")) {
+            FLAGS_minloglevel = 1;
+        } else if (iequals(value, "ERROR")) {
+            FLAGS_minloglevel = 2;
+        } else if (iequals(value, "FATAL")) {
+            FLAGS_minloglevel = 3;
+        } else {
+            LOG(WARNING) << "update sys_log_level failed, need to be INFO, WARNING, ERROR, FATAL";
+        }
+    }
 }
 
 } // namespace doris

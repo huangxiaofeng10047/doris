@@ -17,17 +17,6 @@
 
 import groovy.json.JsonSlurper
 
-/**
- *   @Params url is "/xxx"
- *   @Return response body
- */
-def http_get(url) {
-    def conn = new URL(url).openConnection()
-    conn.setRequestMethod("GET")
-    //token for root
-    return conn.getInputStream().getText()
-}
-
 suite("test_load_to_single_tablet", "p0") {
     sql "show tables"
 
@@ -60,30 +49,36 @@ suite("test_load_to_single_tablet", "p0") {
         set 'load_to_single_tablet', 'true'
 
         file 'test_load_to_single_tablet.json'
-        time 10000 // limit inflight 10s
+        time 20000 // limit inflight 10s
     }
 
     sql "sync"
     def totalCount = sql "select count() from ${tableName}"
-    assertEquals(totalCount[0][0], 10)
-    def res = sql "show tablets from ${tableName}"
-    def tabletMetaUrl1 = res[0][17]
-    def tabletMetaUrl2 = res[1][17]
-    def tabletMetaUrl3 = res[2][17]
-    def tabletMetaRes1 = http_get(tabletMetaUrl1)
-    def tabletMetaRes2 = http_get(tabletMetaUrl2)
-    def tabletMetaRes3 = http_get(tabletMetaUrl3)
+    assertEquals(10, totalCount[0][0])
+    String[][] res = sql "show tablets from ${tableName}"
+    res = deduplicate_tablets(res)
 
-    def obj1 = new JsonSlurper().parseText(tabletMetaRes1)
-    def obj2 = new JsonSlurper().parseText(tabletMetaRes2)
-    def obj3 = new JsonSlurper().parseText(tabletMetaRes3)
-    def rowCount1 = obj1.rs_metas[0].num_rows + obj1.rs_metas[1].num_rows
-    def rowCount2 = obj2.rs_metas[0].num_rows + obj2.rs_metas[1].num_rows
-    def rowCount3 = obj3.rs_metas[0].num_rows + obj3.rs_metas[1].num_rows
+    def tablets = []
+    for (int i = 0; i < res.size(); i++) {
+        tablets.add(res[i][0])
+    }
 
-    assertEquals(rowCount1, 10)
-    assertEquals(rowCount2, 0)
-    assertEquals(rowCount3, 0)
+    def beginIdx = -1
+    def rowCounts = []
+
+    for (int i = tablets.size() - 1; i >= 0; i--) {
+        def countResult = sql "select count() from ${tableName} tablet(${tablets[i]})"
+        rowCounts[i] = countResult[0][0]
+        log.info("tablet: ${tablets[i]}, rowCount: ${rowCounts[i]}")
+        if (rowCounts[i] > 0 && (beginIdx == -1 || beginIdx == i + 1)) {
+            beginIdx = i;
+        }
+    }
+
+    assertEquals(10, rowCounts[beginIdx])
+    for (int i = 1; i < tablets.size(); i++) {
+        assertEquals(0, rowCounts[(beginIdx + i) % tablets.size()])
+    }
 
     // load second time
     streamLoad {
@@ -94,25 +89,23 @@ suite("test_load_to_single_tablet", "p0") {
         set 'load_to_single_tablet', 'true'
 
         file 'test_load_to_single_tablet.json'
-        time 10000 // limit inflight 10s
+        time 20000 // limit inflight 10s
     }
     sql "sync"
     totalCount = sql "select count() from ${tableName}"
-    assertEquals(totalCount[0][0], 20)
-    tabletMetaRes1 = http_get(tabletMetaUrl1)
-    tabletMetaRes2 = http_get(tabletMetaUrl2)
-    tabletMetaRes3 = http_get(tabletMetaUrl3)
+    assertEquals(20, totalCount[0][0])
 
-    obj1 = new JsonSlurper().parseText(tabletMetaRes1)
-    obj2 = new JsonSlurper().parseText(tabletMetaRes2)
-    obj3 = new JsonSlurper().parseText(tabletMetaRes3)
+    for (int i = 0; i < tablets.size(); i++) {
+        def countResult = sql "select count() from ${tableName} tablet(${tablets[i]})"
+        rowCounts[i] = countResult[0][0]
+        log.info("tablet: ${tablets[i]}, rowCount: ${rowCounts[i]}")
+    }
 
-    rowCount1 = obj1.rs_metas[0].num_rows + obj1.rs_metas[1].num_rows + obj1.rs_metas[2].num_rows
-    rowCount2 = obj2.rs_metas[0].num_rows + obj2.rs_metas[1].num_rows + obj2.rs_metas[2].num_rows
-    rowCount3 = obj3.rs_metas[0].num_rows + obj3.rs_metas[1].num_rows + obj3.rs_metas[2].num_rows
-    assertEquals(rowCount1, 10)
-    assertEquals(rowCount2, 10)
-    assertEquals(rowCount3, 0)
+    assertEquals(10, rowCounts[beginIdx])
+    assertEquals(10, rowCounts[(beginIdx + 1) % tablets.size()])
+    for (int i = 2; i < tablets.size(); i++) {
+        assertEquals(0, rowCounts[(beginIdx + i) % tablets.size()])
+    }
 
     // load third time
     streamLoad {
@@ -123,27 +116,28 @@ suite("test_load_to_single_tablet", "p0") {
         set 'load_to_single_tablet', 'true'
 
         file 'test_load_to_single_tablet.json'
-        time 10000 // limit inflight 10s
+        time 20000 // limit inflight 10s
     }
     sql "sync"
     totalCount = sql "select count() from ${tableName}"
-    assertEquals(totalCount[0][0], 30)
-    tabletMetaRes1 = http_get(tabletMetaUrl1)
-    tabletMetaRes2 = http_get(tabletMetaUrl2)
-    tabletMetaRes3 = http_get(tabletMetaUrl3)
+    assertEquals(30, totalCount[0][0])
 
-    obj1 = new JsonSlurper().parseText(tabletMetaRes1)
-    obj2 = new JsonSlurper().parseText(tabletMetaRes2)
-    obj3 = new JsonSlurper().parseText(tabletMetaRes3)
+    for (int i = 0; i < tablets.size(); i++) {
+        def countResult = sql "select count() from ${tableName} tablet(${tablets[i]})"
+        rowCounts[i] = countResult[0][0]
+        log.info("tablet: ${tablets[i]}, rowCount: ${rowCounts[i]}")
+    }
 
-    rowCount1 = obj1.rs_metas[0].num_rows + obj1.rs_metas[1].num_rows + obj1.rs_metas[2].num_rows + obj1.rs_metas[3].num_rows
-    rowCount2 = obj2.rs_metas[0].num_rows + obj2.rs_metas[1].num_rows + obj2.rs_metas[2].num_rows + obj2.rs_metas[3].num_rows
-    rowCount3 = obj3.rs_metas[0].num_rows + obj3.rs_metas[1].num_rows + obj3.rs_metas[2].num_rows + obj3.rs_metas[3].num_rows
-    assertEquals(rowCount1, 10)
-    assertEquals(rowCount2, 10)
-    assertEquals(rowCount3, 10)
+    assertEquals(10, rowCounts[beginIdx])
+    assertEquals(10, rowCounts[(beginIdx + 1) % tablets.size()])
+    assertEquals(10, rowCounts[(beginIdx + 2) % tablets.size()])
+
+    for (int i = 3; i < tablets.size(); i++) {
+        assertEquals(0, rowCounts[(beginIdx + i) % tablets.size()])
+    }
 
     // test partitioned table
+    tableName = "test_load_to_single_tablet_partitioned"
     sql """ DROP TABLE IF EXISTS ${tableName} """
     sql """
         CREATE TABLE IF NOT EXISTS ${tableName} (
@@ -175,45 +169,47 @@ suite("test_load_to_single_tablet", "p0") {
         set 'load_to_single_tablet', 'true'
 
         file 'test_load_to_single_tablet.json'
-        time 10000 // limit inflight 10s
+        time 20000 // limit inflight 10s
     }
 
     sql "sync"
+
     totalCount = sql "select count() from ${tableName}"
-    assertEquals(totalCount[0][0], 10)
+    assertEquals(10, totalCount[0][0])
+
+    def partitionTablets = []
+    def partitionRowCounts = []
+    def partitionBeginIdx = []
     res = sql "show tablets from ${tableName} partitions(p20231011, p20231012)"
-    tabletMetaUrl1 = res[0][17]
-    tabletMetaUrl2 = res[1][17]
-    tabletMetaUrl3 = res[2][17]
-    tabletMetaUrl4 = res[10][17]
-    tabletMetaUrl5 = res[11][17]
-    tabletMetaUrl6 = res[12][17]
-    tabletMetaRes1 = http_get(tabletMetaUrl1)
-    tabletMetaRes2 = http_get(tabletMetaUrl2)
-    tabletMetaRes3 = http_get(tabletMetaUrl3)
-    tabletMetaRes4 = http_get(tabletMetaUrl4)
-    tabletMetaRes5 = http_get(tabletMetaUrl5)
-    tabletMetaRes6 = http_get(tabletMetaUrl6)
+    res = deduplicate_tablets(res)
+    for (int i = 0; i < res.size(); i++) {
+        if (i % 10 == 0) {
+            partitionTablets[i/10] = []
+            partitionRowCounts[i/10] = []
+        }
+        partitionTablets[i/10][i%10] = res[i][0]
+    }
 
-    obj1 = new JsonSlurper().parseText(tabletMetaRes1)
-    obj2 = new JsonSlurper().parseText(tabletMetaRes2)
-    obj3 = new JsonSlurper().parseText(tabletMetaRes3)
-    obj4 = new JsonSlurper().parseText(tabletMetaRes4)
-    obj5 = new JsonSlurper().parseText(tabletMetaRes5)
-    obj6 = new JsonSlurper().parseText(tabletMetaRes6)
+    for (int i = 0; i < partitionTablets.size(); i++) {
+        for (int j = partitionTablets[i].size() - 1; j >= 0; j--) {
+            def countResult = sql "select count() from ${tableName} tablet(${partitionTablets[i][j]})"
+            partitionRowCounts[i][j] = countResult[0][0]
+            log.info("tablet: ${partitionTablets[i][j]}, rowCount: ${partitionRowCounts[i][j]}")
+            if (partitionRowCounts[i][j] > 0 &&
+                (partitionBeginIdx[i] == null || partitionBeginIdx[i] == j + 1)) {
+                partitionBeginIdx[i] = j
+            }
+        }
+    }
 
-    rowCount1 = obj1.rs_metas[0].num_rows + obj1.rs_metas[1].num_rows
-    rowCount2 = obj2.rs_metas[0].num_rows + obj2.rs_metas[1].num_rows
-    rowCount3 = obj3.rs_metas[0].num_rows + obj3.rs_metas[1].num_rows
-    def rowCount4 = obj4.rs_metas[0].num_rows + obj4.rs_metas[1].num_rows
-    def rowCount5 = obj5.rs_metas[0].num_rows + obj5.rs_metas[1].num_rows
-    def rowCount6 = obj6.rs_metas[0].num_rows + obj6.rs_metas[1].num_rows
-    assertEquals(rowCount1, 5)
-    assertEquals(rowCount2, 0)
-    assertEquals(rowCount3, 0)
-    assertEquals(rowCount4, 5)
-    assertEquals(rowCount5, 0)
-    assertEquals(rowCount6, 0)
+    assertEquals(5, partitionRowCounts[0][partitionBeginIdx[0]])
+    for (int i = 1; i < partitionTablets[0].size(); i++) {
+        assertEquals(0, partitionRowCounts[0][(partitionBeginIdx[0] + i) % partitionTablets[0].size()])
+    }
+    assertEquals(5, partitionRowCounts[1][partitionBeginIdx[1]])
+    for (int i = 1; i < partitionTablets[1].size(); i++) {
+        assertEquals(0, partitionRowCounts[1][(partitionBeginIdx[1] + i) % partitionTablets[1].size()])
+    }
 
     // load second time
     streamLoad {
@@ -224,37 +220,31 @@ suite("test_load_to_single_tablet", "p0") {
         set 'load_to_single_tablet', 'true'
 
         file 'test_load_to_single_tablet.json'
-        time 10000 // limit inflight 10s
+        time 20000 // limit inflight 10s
     }
     sql "sync"
     totalCount = sql "select count() from ${tableName}"
-    assertEquals(totalCount[0][0], 20)
-    tabletMetaRes1 = http_get(tabletMetaUrl1)
-    tabletMetaRes2 = http_get(tabletMetaUrl2)
-    tabletMetaRes3 = http_get(tabletMetaUrl3)
-    tabletMetaRes4 = http_get(tabletMetaUrl4)
-    tabletMetaRes5 = http_get(tabletMetaUrl5)
-    tabletMetaRes6 = http_get(tabletMetaUrl6)
+    assertEquals(20, totalCount[0][0])
 
-    obj1 = new JsonSlurper().parseText(tabletMetaRes1)
-    obj2 = new JsonSlurper().parseText(tabletMetaRes2)
-    obj3 = new JsonSlurper().parseText(tabletMetaRes3)
-    obj4 = new JsonSlurper().parseText(tabletMetaRes4)
-    obj5 = new JsonSlurper().parseText(tabletMetaRes5)
-    obj6 = new JsonSlurper().parseText(tabletMetaRes6)
+    for (int i = 0; i < partitionTablets.size(); i++) {
+        for (int j = 0; j < partitionTablets[i].size(); j++) {
+            def countResult = sql "select count() from ${tableName} tablet(${partitionTablets[i][j]})"
+            partitionRowCounts[i][j] = countResult[0][0]
+            log.info("tablet: ${partitionTablets[i][j]}, rowCount: ${partitionRowCounts[i][j]}")
+        }
+    }
 
-    rowCount1 = obj1.rs_metas[0].num_rows + obj1.rs_metas[1].num_rows + obj1.rs_metas[2].num_rows
-    rowCount2 = obj2.rs_metas[0].num_rows + obj2.rs_metas[1].num_rows + obj2.rs_metas[2].num_rows
-    rowCount3 = obj3.rs_metas[0].num_rows + obj3.rs_metas[1].num_rows + obj3.rs_metas[2].num_rows
-    rowCount4 = obj4.rs_metas[0].num_rows + obj4.rs_metas[1].num_rows + obj4.rs_metas[2].num_rows
-    rowCount5 = obj5.rs_metas[0].num_rows + obj5.rs_metas[1].num_rows + obj5.rs_metas[2].num_rows
-    rowCount6 = obj6.rs_metas[0].num_rows + obj6.rs_metas[1].num_rows + obj6.rs_metas[2].num_rows
-    assertEquals(rowCount1, 5)
-    assertEquals(rowCount2, 5)
-    assertEquals(rowCount3, 0)
-    assertEquals(rowCount4, 5)
-    assertEquals(rowCount5, 5)
-    assertEquals(rowCount6, 0)
+    assertEquals(5, partitionRowCounts[0][partitionBeginIdx[0]])
+    assertEquals(5, partitionRowCounts[0][(partitionBeginIdx[0] + 1) % partitionTablets[0].size()])
+    for (int i = 2; i < partitionTablets[0].size(); i++) {
+        assertEquals(0, partitionRowCounts[0][(partitionBeginIdx[0] + i) % partitionTablets[0].size()])
+    }
+
+    assertEquals(5, partitionRowCounts[1][partitionBeginIdx[1]])
+    assertEquals(5, partitionRowCounts[1][(partitionBeginIdx[1] + 1) % partitionTablets[1].size()])
+    for (int i = 2; i < partitionTablets[1].size(); i++) {
+        assertEquals(0, partitionRowCounts[1][(partitionBeginIdx[1] + i) % partitionTablets[1].size()])
+    }
 
     // load third time
     streamLoad {
@@ -265,36 +255,33 @@ suite("test_load_to_single_tablet", "p0") {
         set 'load_to_single_tablet', 'true'
 
         file 'test_load_to_single_tablet.json'
-        time 10000 // limit inflight 10s
+        time 20000 // limit inflight 10s
     }
     sql "sync"
     totalCount = sql "select count() from ${tableName}"
-    assertEquals(totalCount[0][0], 30)
-    tabletMetaRes1 = http_get(tabletMetaUrl1)
-    tabletMetaRes2 = http_get(tabletMetaUrl2)
-    tabletMetaRes3 = http_get(tabletMetaUrl3)
-    tabletMetaRes4 = http_get(tabletMetaUrl4)
-    tabletMetaRes5 = http_get(tabletMetaUrl5)
-    tabletMetaRes6 = http_get(tabletMetaUrl6)
+    assertEquals(30, totalCount[0][0])
 
-    obj1 = new JsonSlurper().parseText(tabletMetaRes1)
-    obj2 = new JsonSlurper().parseText(tabletMetaRes2)
-    obj3 = new JsonSlurper().parseText(tabletMetaRes3)
-    obj4 = new JsonSlurper().parseText(tabletMetaRes4)
-    obj5 = new JsonSlurper().parseText(tabletMetaRes5)
-    obj6 = new JsonSlurper().parseText(tabletMetaRes6)
+    for (int i = 0; i < partitionTablets.size(); i++) {
+        for (int j = 0; j < partitionTablets[i].size(); j++) {
+            def countResult = sql "select count() from ${tableName} tablet(${partitionTablets[i][j]})"
+            partitionRowCounts[i][j] = countResult[0][0]
+            log.info("tablet: ${partitionTablets[i][j]}, rowCount: ${partitionRowCounts[i][j]}")
+        }
+    }
 
-    rowCount1 = obj1.rs_metas[0].num_rows + obj1.rs_metas[1].num_rows + obj1.rs_metas[2].num_rows + obj1.rs_metas[3].num_rows
-    rowCount2 = obj2.rs_metas[0].num_rows + obj2.rs_metas[1].num_rows + obj2.rs_metas[2].num_rows + obj2.rs_metas[3].num_rows
-    rowCount3 = obj3.rs_metas[0].num_rows + obj3.rs_metas[1].num_rows + obj3.rs_metas[2].num_rows + obj3.rs_metas[3].num_rows
-    rowCount4 = obj4.rs_metas[0].num_rows + obj4.rs_metas[1].num_rows + obj4.rs_metas[2].num_rows + obj4.rs_metas[3].num_rows
-    rowCount5 = obj5.rs_metas[0].num_rows + obj5.rs_metas[1].num_rows + obj5.rs_metas[2].num_rows + obj5.rs_metas[3].num_rows
-    rowCount6 = obj6.rs_metas[0].num_rows + obj6.rs_metas[1].num_rows + obj6.rs_metas[2].num_rows + obj6.rs_metas[3].num_rows
-    assertEquals(rowCount1, 5)
-    assertEquals(rowCount2, 5)
-    assertEquals(rowCount3, 5)
-    assertEquals(rowCount4, 5)
-    assertEquals(rowCount5, 5)
-    assertEquals(rowCount6, 5)
+    assertEquals(5, partitionRowCounts[0][partitionBeginIdx[0]])
+    assertEquals(5, partitionRowCounts[0][(partitionBeginIdx[0] + 1) % partitionTablets[0].size()])
+    assertEquals(5, partitionRowCounts[0][(partitionBeginIdx[0] + 2) % partitionTablets[0].size()])
+
+    for (int i = 3; i < partitionTablets[0].size(); i++) {
+        assertEquals(0, partitionRowCounts[0][(partitionBeginIdx[0] + i) % partitionTablets[0].size()])
+    }
+
+    assertEquals(5, partitionRowCounts[1][partitionBeginIdx[1]])
+    assertEquals(5, partitionRowCounts[1][(partitionBeginIdx[1] + 1) % partitionTablets[1].size()])
+    assertEquals(5, partitionRowCounts[1][(partitionBeginIdx[1] + 2) % partitionTablets[1].size()])
+    for (int i = 3; i < partitionTablets[1].size(); i++) {
+        assertEquals(0, partitionRowCounts[1][(partitionBeginIdx[1] + i) % partitionTablets[1].size()])
+    }
 }
 

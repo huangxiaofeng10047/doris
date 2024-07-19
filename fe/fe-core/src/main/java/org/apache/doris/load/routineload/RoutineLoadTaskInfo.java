@@ -27,6 +27,7 @@ import org.apache.doris.common.QuotaExceedException;
 import org.apache.doris.common.UserException;
 import org.apache.doris.common.util.DebugUtil;
 import org.apache.doris.common.util.TimeUtils;
+import org.apache.doris.service.ExecuteEnv;
 import org.apache.doris.service.FrontendOptions;
 import org.apache.doris.thrift.TRoutineLoadTask;
 import org.apache.doris.transaction.BeginTransactionException;
@@ -57,7 +58,6 @@ public abstract class RoutineLoadTaskInfo {
     protected static final long INIT_TXN_ID = -1L;
     protected long txnId = INIT_TXN_ID;
     protected long jobId;
-    protected String clusterName;
 
     private long createTimeMs;
     private long executeStartTimeMs = -1L;
@@ -73,22 +73,26 @@ public abstract class RoutineLoadTaskInfo {
 
     protected boolean isMultiTable = false;
 
+    protected static final int MAX_TIMEOUT_BACK_OFF_COUNT = 3;
+    protected int timeoutBackOffCount = 0;
+
     // this status will be set when corresponding transaction's status is changed.
     // so that user or other logic can know the status of the corresponding txn.
     protected TransactionStatus txnStatus = TransactionStatus.UNKNOWN;
 
-    public RoutineLoadTaskInfo(UUID id, long jobId, String clusterName, long timeoutMs, boolean isMultiTable) {
+    public RoutineLoadTaskInfo(UUID id, long jobId, long timeoutMs,
+                        int timeoutBackOffCount, boolean isMultiTable) {
         this.id = id;
         this.jobId = jobId;
-        this.clusterName = clusterName;
         this.createTimeMs = System.currentTimeMillis();
         this.timeoutMs = timeoutMs;
+        this.timeoutBackOffCount = timeoutBackOffCount;
         this.isMultiTable = isMultiTable;
     }
 
-    public RoutineLoadTaskInfo(UUID id, long jobId, String clusterName, long timeoutMs, long previousBeId,
-                               boolean isMultiTable) {
-        this(id, jobId, clusterName, timeoutMs, isMultiTable);
+    public RoutineLoadTaskInfo(UUID id, long jobId, long timeoutMs, int timeoutBackOffCount,
+                        long previousBeId, boolean isMultiTable) {
+        this(id, jobId, timeoutMs, timeoutBackOffCount, isMultiTable);
         this.previousBeId = previousBeId;
     }
 
@@ -98,10 +102,6 @@ public abstract class RoutineLoadTaskInfo {
 
     public long getJobId() {
         return jobId;
-    }
-
-    public String getClusterName() {
-        return clusterName;
     }
 
     public void setExecuteStartTimeMs(long executeStartTimeMs) {
@@ -136,6 +136,10 @@ public abstract class RoutineLoadTaskInfo {
         this.lastScheduledTime = lastScheduledTime;
     }
 
+    public void setTimeoutMs(long timeoutMs) {
+        this.timeoutMs = timeoutMs;
+    }
+
     public long getTimeoutMs() {
         return timeoutMs;
     }
@@ -148,6 +152,14 @@ public abstract class RoutineLoadTaskInfo {
         return txnStatus;
     }
 
+    public void setTimeoutBackOffCount(int timeoutBackOffCount) {
+        this.timeoutBackOffCount = timeoutBackOffCount;
+    }
+
+    public int getTimeoutBackOffCount() {
+        return timeoutBackOffCount;
+    }
+
     public boolean isTimeout() {
         if (txnStatus == TransactionStatus.COMMITTED || txnStatus == TransactionStatus.VISIBLE) {
             // the corresponding txn is already finished, this task can not be treated as timeout.
@@ -155,11 +167,26 @@ public abstract class RoutineLoadTaskInfo {
         }
 
         if (isRunning() && System.currentTimeMillis() - executeStartTimeMs > timeoutMs) {
-            LOG.info("task {} is timeout. start: {}, timeout: {}", DebugUtil.printId(id),
-                    executeStartTimeMs, timeoutMs);
+            LOG.info("task {} is timeout. start: {}, timeout: {}, timeoutBackOffCount: {}", DebugUtil.printId(id),
+                    executeStartTimeMs, timeoutMs, timeoutBackOffCount);
             return true;
         }
         return false;
+    }
+
+    public void selfAdaptTimeout(RLTaskTxnCommitAttachment rlTaskTxnCommitAttachment) {
+        long taskExecutionTime = rlTaskTxnCommitAttachment.getTaskExecutionTimeMs();
+        long timeoutMs = this.timeoutMs;
+
+        while (this.timeoutBackOffCount > 0) {
+            timeoutMs = timeoutMs >> 1;
+            if (timeoutMs <= taskExecutionTime) {
+                this.timeoutMs = timeoutMs << 1;
+                return;
+            }
+            this.timeoutBackOffCount--;
+        }
+        this.timeoutMs = timeoutMs;
     }
 
     abstract TRoutineLoadTask createRoutineLoadTask() throws UserException;
@@ -173,7 +200,9 @@ public abstract class RoutineLoadTaskInfo {
         try {
             txnId = Env.getCurrentGlobalTransactionMgr().beginTransaction(routineLoadJob.getDbId(),
                     Lists.newArrayList(routineLoadJob.getTableId()), DebugUtil.printId(id), null,
-                    new TxnCoordinator(TxnSourceType.FE, FrontendOptions.getLocalHostAddress()),
+                    new TxnCoordinator(TxnSourceType.FE, 0,
+                            FrontendOptions.getLocalHostAddress(),
+                            ExecuteEnv.getInstance().getStartupTime()),
                     TransactionState.LoadJobSourceType.ROUTINE_LOAD_TASK, routineLoadJob.getId(),
                     timeoutMs / 1000);
         } catch (DuplicatedRequestException e) {
@@ -184,7 +213,9 @@ public abstract class RoutineLoadTaskInfo {
             // this should not happen for a routine load task, throw it out
             throw e;
         } catch (AnalysisException | BeginTransactionException e) {
-            LOG.debug("begin txn failed for routine load task: {}, {}", DebugUtil.printId(id), e.getMessage());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("begin txn failed for routine load task: {}, {}", DebugUtil.printId(id), e.getMessage());
+            }
             return false;
         } catch (MetaNotFoundException | QuotaExceedException e) {
             LOG.warn("failed to begin txn for routine load task: {}, job id: {}",
@@ -215,7 +246,7 @@ public abstract class RoutineLoadTaskInfo {
 
     abstract String getTaskDataSourceProperties();
 
-    abstract boolean hasMoreDataToConsume();
+    abstract boolean hasMoreDataToConsume() throws UserException;
 
     @Override
     public boolean equals(Object obj) {

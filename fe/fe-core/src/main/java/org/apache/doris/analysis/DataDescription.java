@@ -32,6 +32,7 @@ import org.apache.doris.common.Pair;
 import org.apache.doris.common.util.FileFormatConstants;
 import org.apache.doris.common.util.SqlParserUtils;
 import org.apache.doris.common.util.Util;
+import org.apache.doris.datasource.InternalCatalog;
 import org.apache.doris.load.loadv2.LoadTask;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.qe.ConnectContext;
@@ -154,6 +155,8 @@ public class DataDescription implements InsertStmt.DataDesc {
     private boolean trimDoubleQuotes = false;
     private boolean isMysqlLoad = false;
     private int skipLines = 0;
+    // use for copy into
+    private boolean ignoreCsvRedundantCol = false;
 
     private boolean isAnalyzed = false;
 
@@ -356,6 +359,9 @@ public class DataDescription implements InsertStmt.DataDesc {
                         break;
                     case FORMAT_WAL:
                         this.fileFormat = "wal";
+                        break;
+                    case FORMAT_ARROW:
+                        this.fileFormat = "arrow";
                         break;
                     default:
                         this.fileFormat = "unknown";
@@ -593,6 +599,10 @@ public class DataDescription implements InsertStmt.DataDesc {
         return fileFormat;
     }
 
+    public void setCompressType(TFileCompressType compressType) {
+        this.compressType = compressType;
+    }
+
     public TFileCompressType getCompressType() {
         return compressType;
     }
@@ -753,6 +763,14 @@ public class DataDescription implements InsertStmt.DataDesc {
 
     public int getSkipLines() {
         return skipLines;
+    }
+
+    public boolean getIgnoreCsvRedundantCol() {
+        return ignoreCsvRedundantCol;
+    }
+
+    public void setIgnoreCsvRedundantCol(boolean ignoreCsvRedundantCol) {
+        this.ignoreCsvRedundantCol = ignoreCsvRedundantCol;
     }
 
     /*
@@ -1013,8 +1031,9 @@ public class DataDescription implements InsertStmt.DataDesc {
         }
 
         // check auth
-        if (!Env.getCurrentEnv().getAccessManager().checkTblPriv(ConnectContext.get(), fullDbName, tableName,
-                PrivPredicate.LOAD)) {
+        if (!Env.getCurrentEnv().getAccessManager()
+                .checkTblPriv(ConnectContext.get(), InternalCatalog.INTERNAL_CATALOG_NAME, fullDbName, tableName,
+                        PrivPredicate.LOAD)) {
             ErrorReport.reportAnalysisException(ErrorCode.ERR_TABLEACCESS_DENIED_ERROR, "LOAD",
                     ConnectContext.get().getQualifiedUser(),
                     ConnectContext.get().getRemoteIP(), fullDbName + ": " + tableName);
@@ -1022,8 +1041,9 @@ public class DataDescription implements InsertStmt.DataDesc {
 
         // check hive table auth
         if (isLoadFromTable()) {
-            if (!Env.getCurrentEnv().getAccessManager().checkTblPriv(ConnectContext.get(), fullDbName, srcTableName,
-                    PrivPredicate.SELECT)) {
+            if (!Env.getCurrentEnv().getAccessManager()
+                    .checkTblPriv(ConnectContext.get(), InternalCatalog.INTERNAL_CATALOG_NAME, fullDbName, srcTableName,
+                            PrivPredicate.SELECT)) {
                 ErrorReport.reportAnalysisException(ErrorCode.ERR_TABLEACCESS_DENIED_ERROR, "SELECT",
                         ConnectContext.get().getQualifiedUser(),
                         ConnectContext.get().getRemoteIP(), fullDbName + ": " + srcTableName);
@@ -1048,7 +1068,7 @@ public class DataDescription implements InsertStmt.DataDesc {
             if (Strings.isNullOrEmpty(dbName)) {
                 ErrorReport.reportAnalysisException(ErrorCode.ERR_NO_DB_ERROR);
             }
-            this.dbName = ClusterNamespace.getFullName(analyzer.getClusterName(), dbName);
+            this.dbName = dbName;
             return this.dbName;
         } else {
             this.dbName = labelDbName;
@@ -1124,6 +1144,7 @@ public class DataDescription implements InsertStmt.DataDesc {
                     && !fileFormat.equalsIgnoreCase(FileFormatConstants.FORMAT_ORC)
                     && !fileFormat.equalsIgnoreCase(FileFormatConstants.FORMAT_JSON)
                     && !fileFormat.equalsIgnoreCase(FileFormatConstants.FORMAT_WAL)
+                    && !fileFormat.equalsIgnoreCase(FileFormatConstants.FORMAT_ARROW)
                     && !fileFormat.equalsIgnoreCase(FileFormatConstants.FORMAT_HIVE_TEXT)) {
                 throw new AnalysisException("File Format Type " + fileFormat + " is invalid.");
             }
@@ -1208,4 +1229,3 @@ public class DataDescription implements InsertStmt.DataDesc {
         return toSql();
     }
 }
-

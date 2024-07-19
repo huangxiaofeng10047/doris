@@ -30,6 +30,7 @@ import org.apache.doris.load.loadv2.LoadTask;
 import org.apache.doris.mysql.privilege.AccessControllerManager;
 import org.apache.doris.mysql.privilege.PrivPredicate;
 import org.apache.doris.qe.ConnectContext;
+import org.apache.doris.qe.VariableMgr;
 import org.apache.doris.task.LoadTaskInfo;
 
 import com.google.common.collect.Lists;
@@ -57,9 +58,6 @@ public class LoadStmtTest {
 
     @Before
     public void setUp() {
-        analyzer = AccessTestUtil.fetchAdminAnalyzer(true);
-        dataDescriptions = Lists.newArrayList();
-        dataDescriptions.add(desc);
         new Expectations() {
             {
                 ConnectContext.get();
@@ -68,13 +66,21 @@ public class LoadStmtTest {
 
                 ctx.getQualifiedUser();
                 minTimes = 0;
-                result = "default_cluster:user";
+                result = "user";
+
+                ctx.getSessionVariable();
+                minTimes = 0;
+                result = VariableMgr.newSessionVariable();
 
                 desc.toSql();
                 minTimes = 0;
                 result = "XXX";
             }
         };
+
+        analyzer = AccessTestUtil.fetchAdminAnalyzer(true);
+        dataDescriptions = Lists.newArrayList();
+        dataDescriptions.add(desc);
     }
 
     @Test
@@ -96,9 +102,9 @@ public class LoadStmtTest {
                 desc.getTableName();
                 minTimes = 0;
                 result = "testTbl";
-                desc.analyzeFullDbName("testCluster:testDb", (Analyzer) any);
+                desc.analyzeFullDbName("testDb", (Analyzer) any);
                 minTimes = 0;
-                result = "testCluster:testDb";
+                result = "testDb";
                 env.getResourceMgr();
                 result = resourceMgr;
                 resourceMgr.getResource(resourceName);
@@ -112,11 +118,11 @@ public class LoadStmtTest {
 
         LoadStmt stmt = new LoadStmt(new LabelName("testDb", "testLabel"), dataDescriptionList, (BrokerDesc) null, null, "");
         stmt.analyze(analyzer);
-        Assert.assertEquals("testCluster:testDb", stmt.getLabel().getDbName());
+        Assert.assertEquals("testDb", stmt.getLabel().getDbName());
         Assert.assertEquals(dataDescriptionList, stmt.getDataDescriptions());
         Assert.assertNull(stmt.getProperties());
 
-        Assert.assertEquals("LOAD LABEL `testCluster:testDb`.`testLabel`\n"
+        Assert.assertEquals("LOAD LABEL `testDb`.`testLabel`\n"
                 + "(XXX)", stmt.toString());
 
         // test ResourceDesc
@@ -124,7 +130,7 @@ public class LoadStmtTest {
                             new ResourceDesc(resourceName, null), null, "");
         stmt.analyze(analyzer);
         Assert.assertEquals(EtlJobType.SPARK, stmt.getResourceDesc().getEtlJobType());
-        Assert.assertEquals("LOAD LABEL `testCluster:testDb`.`testLabel`\n(XXX)\nWITH RESOURCE 'spark0'",
+        Assert.assertEquals("LOAD LABEL `testDb`.`testLabel`\n(XXX)\nWITH RESOURCE 'spark0'",
                             stmt.toString());
     }
 
@@ -212,7 +218,7 @@ public class LoadStmtTest {
 
                 desc.analyzeFullDbName(null, (Analyzer) any);
                 minTimes = 0;
-                result = "testCluster:testDb";
+                result = "testDb";
 
                 desc.getMergeType();
                 minTimes = 0;
@@ -274,7 +280,7 @@ public class LoadStmtTest {
 
                 desc.analyzeFullDbName(null, (Analyzer) any);
                 minTimes = 0;
-                result = "testCluster:testDb";
+                result = "testDb";
 
                 desc.getMergeType();
                 minTimes = 0;

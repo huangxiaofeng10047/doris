@@ -22,10 +22,8 @@ import org.codehaus.groovy.runtime.IOGroovyMethods
 
 suite("test_nestedtypes_json_insert_into_with_s3", "p0") {
     sql 'use regression_test_datatype_p0_nested_types'
-    sql 'set enable_nereids_planner=false'
     sql 'set max_allowed_packet=4194304'
     sql 'set topn_opt_limit_threshold=10000'
-    sql """ADMIN SET FRONTEND CONFIG ('disable_nested_complex_type' = 'false')"""
 
     String ak = getS3AK()
     String sk = getS3SK()
@@ -35,9 +33,9 @@ suite("test_nestedtypes_json_insert_into_with_s3", "p0") {
 
     def dataFilePath = "https://"+"${bucket}"+"."+"${s3_endpoint}"+"/regression/datalake"
 
-    ArrayList<String> json_files = ["${dataFilePath}/amory_array_scala.json", "${dataFilePath}/amory_arr_arr.json",
-                                           "${dataFilePath}/amory_map_scala_scala.json","${dataFilePath}/amory_arr_map.json",
-                                            "${dataFilePath}/amory_map_array.json"]
+    ArrayList<String> json_files = ["${dataFilePath}/as.json", "${dataFilePath}/aa.json",
+                                           "${dataFilePath}/ms.json","${dataFilePath}/am.json",
+                                            "${dataFilePath}/ma.json"]
 
     List<String> table_names = new ArrayList<>()
     def nested_table_dup = "tbl_json_array_nested_types_s3"
@@ -207,6 +205,7 @@ suite("test_nestedtypes_json_insert_into_with_s3", "p0") {
                 "s3.access_key"= "${ak}",
                 "s3.secret_key" = "${sk}",
                 "format" = "json",
+                "provider" = "${getS3Provider()}",
                 "read_json_by_line"="true") order by k1 limit 1;
             """
 
@@ -215,6 +214,7 @@ suite("test_nestedtypes_json_insert_into_with_s3", "p0") {
                 "s3.access_key"= "${ak}",
                 "s3.secret_key" = "${sk}",
                 "format" = "json",
+                "provider" = "${getS3Provider()}",
                 "read_json_by_line"="true")
              """
 
@@ -231,6 +231,7 @@ suite("test_nestedtypes_json_insert_into_with_s3", "p0") {
                 "s3.access_key"= "${ak}",
                 "s3.secret_key" = "${sk}",
                 "format" = "json",
+                "provider" = "${getS3Provider()}",
                 "read_json_by_line"="true") order by k1 limit 1;
             """
 

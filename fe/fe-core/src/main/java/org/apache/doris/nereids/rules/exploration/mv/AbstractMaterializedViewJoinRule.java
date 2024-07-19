@@ -17,12 +17,17 @@
 
 package org.apache.doris.nereids.rules.exploration.mv;
 
-import org.apache.doris.nereids.rules.exploration.mv.mapping.RelationMapping;
+import org.apache.doris.nereids.CascadesContext;
+import org.apache.doris.nereids.rules.exploration.mv.StructInfo.PlanCheckContext;
+import org.apache.doris.nereids.rules.exploration.mv.mapping.SlotMapping;
+import org.apache.doris.nereids.trees.expressions.Alias;
+import org.apache.doris.nereids.trees.expressions.Expression;
 import org.apache.doris.nereids.trees.expressions.NamedExpression;
 import org.apache.doris.nereids.trees.plans.Plan;
 import org.apache.doris.nereids.trees.plans.logical.LogicalProject;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * AbstractMaterializedViewJoinRule
@@ -34,30 +39,46 @@ public abstract class AbstractMaterializedViewJoinRule extends AbstractMateriali
     protected Plan rewriteQueryByView(MatchMode matchMode,
             StructInfo queryStructInfo,
             StructInfo viewStructInfo,
-            RelationMapping queryToViewTableMappings,
-            Plan tempRewritedPlan) {
-
+            SlotMapping targetToSourceMapping,
+            Plan tempRewritedPlan,
+            MaterializationContext materializationContext,
+            CascadesContext cascadesContext) {
         // Rewrite top projects, represent the query projects by view
-        List<NamedExpression> expressions = rewriteExpression(
+        List<Expression> expressionsRewritten = rewriteExpression(
                 queryStructInfo.getExpressions(),
-                queryStructInfo,
-                viewStructInfo,
-                queryToViewTableMappings,
-                tempRewritedPlan
+                queryStructInfo.getTopPlan(),
+                materializationContext.getShuttledExprToScanExprMapping(),
+                targetToSourceMapping,
+                true,
+                queryStructInfo.getTableBitSet()
         );
         // Can not rewrite, bail out
-        if (expressions == null) {
+        if (expressionsRewritten.isEmpty()) {
+            materializationContext.recordFailReason(queryStructInfo,
+                    "Rewrite expressions by view in join fail",
+                    () -> String.format("expressionToRewritten is %s,\n mvExprToMvScanExprMapping is %s,\n"
+                                    + "targetToSourceMapping = %s", queryStructInfo.getExpressions(),
+                            materializationContext.getShuttledExprToScanExprMapping(),
+                            targetToSourceMapping));
             return null;
         }
-        return new LogicalProject<>(expressions, tempRewritedPlan);
+        return new LogicalProject<>(
+                expressionsRewritten.stream()
+                        .map(expression -> expression instanceof NamedExpression ? expression : new Alias(expression))
+                        .map(NamedExpression.class::cast)
+                        .collect(Collectors.toList()),
+                tempRewritedPlan);
     }
 
-    // Check join is whether valid or not. Support join's input can not contain aggregate
-    // Only support project, filter, join, logical relation node and
-    // join condition should be slot reference equals currently
+    /**
+     * Check join is whether valid or not. Support join's input only support project, filter, join,
+     * logical relation, simple aggregate node. Con not have aggregate above on join.
+     * Join condition should be slot reference equals currently.
+     */
     @Override
-    protected boolean checkPattern(StructInfo structInfo) {
-        // TODO Should get struct info from hyper graph and check
-        return false;
+    protected boolean checkQueryPattern(StructInfo structInfo, CascadesContext cascadesContext) {
+        PlanCheckContext checkContext = PlanCheckContext.of(SUPPORTED_JOIN_TYPE_SET);
+        return structInfo.getTopPlan().accept(StructInfo.PLAN_PATTERN_CHECKER, checkContext)
+                && !checkContext.isContainsTopAggregate();
     }
 }

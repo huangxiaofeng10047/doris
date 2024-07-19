@@ -97,8 +97,14 @@ Status IDataType::from_string(ReadBuffer& rb, IColumn* column) const {
     return Status::OK();
 }
 
-void IDataType::insert_default_into(IColumn& column) const {
-    column.insert_default();
+void IDataType::to_string_batch(const IColumn& column, ColumnString& column_to) const {
+    const auto size = column.size();
+    column_to.reserve(size * 2);
+    VectorBufferWriter write_buffer(column_to);
+    for (size_t i = 0; i < size; ++i) {
+        to_string(column, i, write_buffer);
+        write_buffer.commit();
+    }
 }
 
 void IDataType::to_pb_column_meta(PColumnMeta* col_meta) const {
@@ -139,9 +145,9 @@ PGenericType_TypeId IDataType::get_pdata_type(const IDataType* data_type) {
         return PGenericType::DECIMAL32;
     case TypeIndex::Decimal64:
         return PGenericType::DECIMAL64;
-    case TypeIndex::Decimal128:
+    case TypeIndex::Decimal128V2:
         return PGenericType::DECIMAL128;
-    case TypeIndex::Decimal128I:
+    case TypeIndex::Decimal128V3:
         return PGenericType::DECIMAL128I;
     case TypeIndex::Decimal256:
         return PGenericType::DECIMAL256;

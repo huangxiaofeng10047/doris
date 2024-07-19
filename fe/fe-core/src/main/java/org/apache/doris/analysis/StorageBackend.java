@@ -27,6 +27,7 @@ import org.apache.doris.datasource.property.constants.BosProperties;
 import org.apache.doris.thrift.TStorageBackendType;
 
 import com.google.common.base.Strings;
+import com.google.gson.annotations.SerializedName;
 import org.apache.commons.lang3.StringUtils;
 
 import java.util.Map;
@@ -35,9 +36,10 @@ public class StorageBackend implements ParseNode {
     private String location;
     private StorageDesc storageDesc;
 
-    public static void checkPath(String path, StorageBackend.StorageType type) throws AnalysisException {
+    public static void checkPath(String path, StorageBackend.StorageType type, String exceptionMsg)
+            throws AnalysisException {
         if (Strings.isNullOrEmpty(path)) {
-            throw new AnalysisException("No destination path specified.");
+            throw new AnalysisException(exceptionMsg == null ? "No destination path specified." : exceptionMsg);
         }
         checkUri(URI.create(path), type);
     }
@@ -60,13 +62,17 @@ public class StorageBackend implements ParseNode {
                     && !schema.equalsIgnoreCase("cosn")
                     && !schema.equalsIgnoreCase("gfs")
                     && !schema.equalsIgnoreCase("jfs")
+                    && !schema.equalsIgnoreCase("azure")
                     && !schema.equalsIgnoreCase("gs")) {
-                throw new AnalysisException("Invalid broker path. please use valid 'hdfs://', 'viewfs://', 'afs://',"
-                        + " 'bos://', 'ofs://', 'obs://', 'oss://', 's3a://', 'cosn://', 'gfs://', 'gs://'"
-                        + " or 'jfs://' path.");
+                throw new AnalysisException(
+                        "Invalid broker path " + uri.toString() + ". please use valid 'hdfs://', 'viewfs://', 'afs://',"
+                                + " 'bos://', 'ofs://', 'obs://', 'oss://', 's3a://', 'cosn://', 'gfs://', 'gs://'"
+                                + " or 'jfs://' path.");
             }
         } else if (type == StorageBackend.StorageType.S3 && !schema.equalsIgnoreCase("s3")) {
-            throw new AnalysisException("Invalid export path. please use valid 's3://' path.");
+            throw new AnalysisException("Invalid export path " + uri.toString() + ". please use valid 's3://' path.");
+        } else if (type == StorageBackend.StorageType.AZURE && !schema.equalsIgnoreCase("azure")) {
+            throw new AnalysisException("Invalid export path. please use valid 'azure://' path.");
         } else if (type == StorageBackend.StorageType.HDFS && !schema.equalsIgnoreCase("hdfs")
                 && !schema.equalsIgnoreCase("viewfs")) {
             throw new AnalysisException("Invalid export path. please use valid 'HDFS://' or 'viewfs://' path.");
@@ -120,7 +126,7 @@ public class StorageBackend implements ParseNode {
         if (Strings.isNullOrEmpty(location)) {
             throw new AnalysisException("You must specify a location on the repository");
         }
-        checkPath(location, storageType);
+        checkPath(location, storageType, null);
     }
 
     @Override
@@ -145,8 +151,10 @@ public class StorageBackend implements ParseNode {
         OFS("Tencent CHDFS"),
         GFS("Tencent Goose File System"),
         JFS("Juicefs"),
-        STREAM("Stream load pipe");
+        STREAM("Stream load pipe"),
+        AZURE("MicroSoft Azure Blob");
 
+        @SerializedName("desc")
         private final String description;
 
         StorageType(String description) {
@@ -170,6 +178,8 @@ public class StorageBackend implements ParseNode {
                     return TStorageBackendType.JFS;
                 case LOCAL:
                     return TStorageBackendType.LOCAL;
+                case AZURE:
+                    return TStorageBackendType.AZURE;
                 default:
                     return TStorageBackendType.BROKER;
             }

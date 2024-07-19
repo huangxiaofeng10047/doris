@@ -41,16 +41,16 @@ public class ShowUserPropertyStmtTest {
 
     @Before
     public void setUp() {
-        analyzer = AccessTestUtil.fetchAdminAnalyzer(true);
         MockedAuth.mockedAccess(accessManager);
         MockedAuth.mockedConnectContext(ctx, "root", "192.168.1.1");
+        analyzer = AccessTestUtil.fetchAdminAnalyzer(true);
     }
 
     @Test
     public void testNormal() throws UserException {
         ShowUserPropertyStmt stmt = new ShowUserPropertyStmt("testUser", "%load_cluster%", false);
         stmt.analyze(analyzer);
-        Assert.assertEquals("SHOW PROPERTY FOR 'testCluster:testUser' LIKE '%load_cluster%'", stmt.toString());
+        Assert.assertEquals("SHOW PROPERTY FOR 'testUser' LIKE '%load_cluster%'", stmt.toString());
         List<Column> columns = stmt.getMetaData().getColumns();
         for (int i = 0; i < columns.size(); i++) {
             Assert.assertEquals(columns.get(i).getName(), UserPropertyProcNode.TITLE_NAMES.get(i));

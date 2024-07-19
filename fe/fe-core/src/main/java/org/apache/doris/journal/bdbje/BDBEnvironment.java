@@ -40,6 +40,7 @@ import com.sleepycat.je.rep.NetworkRestore;
 import com.sleepycat.je.rep.NetworkRestoreConfig;
 import com.sleepycat.je.rep.NoConsistencyRequiredPolicy;
 import com.sleepycat.je.rep.NodeType;
+import com.sleepycat.je.rep.RepInternal;
 import com.sleepycat.je.rep.ReplicatedEnvironment;
 import com.sleepycat.je.rep.ReplicationConfig;
 import com.sleepycat.je.rep.RollbackException;
@@ -95,16 +96,16 @@ public class BDBEnvironment {
     public void setup(File envHome, String selfNodeName, String selfNodeHostPort,
                       String helperHostPort) {
         // Almost never used, just in case the master can not restart
-        if (metadataFailureRecovery) {
-            if (!isElectable) {
+        if (metadataFailureRecovery || Config.enable_check_compatibility_mode) {
+            if (!isElectable && !Config.enable_check_compatibility_mode) {
                 LOG.error("Current node is not in the electable_nodes list. will exit");
                 System.exit(-1);
             }
-            LOG.info("start group reset");
+            LOG.warn("start group reset");
             DbResetRepGroup resetUtility = new DbResetRepGroup(
                     envHome, PALO_JOURNAL_GROUP, selfNodeName, selfNodeHostPort);
             resetUtility.reset();
-            LOG.info("group has been reset.");
+            LOG.warn("metadata recovery mode, group has been reset.");
         }
 
         // set replication config
@@ -141,6 +142,11 @@ public class BDBEnvironment {
                 String.valueOf(Config.bdbje_reserved_disk_bytes));
         environmentConfig.setConfigParam(EnvironmentConfig.FREE_DISK,
                 String.valueOf(Config.bdbje_free_disk_bytes));
+
+        if (Config.ignore_bdbje_log_checksum_read) {
+            environmentConfig.setConfigParam(EnvironmentConfig.LOG_CHECKSUM_READ, "false");
+            LOG.warn("set EnvironmentConfig.LOG_CHECKSUM_READ false");
+        }
 
         if (BDBJE_LOG_LEVEL.contains(Config.bdbje_file_logging_level)) {
             java.util.logging.Logger parent = java.util.logging.Logger.getLogger("com.sleepycat.je");
@@ -364,7 +370,9 @@ public class BDBEnvironment {
                 if (StringUtils.isNumeric(name)) {
                     ret.add(Long.parseLong(name));
                 } else {
-                    // LOG.debug("get database names, skipped {}", name);
+                    if (LOG.isDebugEnabled()) {
+                        // LOG.debug("get database names, skipped {}", name);
+                    }
                 }
             }
         }
@@ -458,6 +466,25 @@ public class BDBEnvironment {
         }
         // default value is SIMPLE_MAJORITY
         return Durability.ReplicaAckPolicy.SIMPLE_MAJORITY;
+    }
+
+    public String getNotReadyReason() {
+        if (replicatedEnvironment == null) {
+            LOG.warn("replicatedEnvironment is null");
+            return "replicatedEnvironment is null";
+        }
+        try {
+            if (replicatedEnvironment.getInvalidatingException() != null) {
+                return replicatedEnvironment.getInvalidatingException().getMessage();
+            }
+
+            if (RepInternal.getNonNullRepImpl(replicatedEnvironment).getDiskLimitViolation() != null) {
+                return RepInternal.getNonNullRepImpl(replicatedEnvironment).getDiskLimitViolation();
+            }
+        } catch (Exception e) {
+            LOG.warn("getNotReadyReason exception:", e);
+        }
+        return "";
     }
 
 }

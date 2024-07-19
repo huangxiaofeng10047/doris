@@ -32,15 +32,28 @@ namespace doris::vectorized {
 bool DataTypeIPv6::equals(const IDataType& rhs) const {
     return typeid(rhs) == typeid(*this);
 }
-
+size_t DataTypeIPv6::number_length() const {
+    //ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+    return 40;
+}
+void DataTypeIPv6::push_number(ColumnString::Chars& chars, const IPv6& num) const {
+    auto value = IPv6Value(num);
+    auto ipv6_str = value.to_string();
+    chars.insert(ipv6_str.begin(), ipv6_str.end());
+}
 std::string DataTypeIPv6::to_string(const IColumn& column, size_t row_num) const {
     auto result = check_column_const_set_readability(column, row_num);
     ColumnPtr ptr = result.first;
     row_num = result.second;
-    IPv6 value = assert_cast<const ColumnIPv6&>(*ptr).get_element(row_num);
-    return convert_ipv6_to_string(value);
+    IPv6 ipv6_val = assert_cast<const ColumnIPv6&>(*ptr).get_element(row_num);
+    auto value = IPv6Value(ipv6_val);
+    return value.to_string();
 }
 
+std::string DataTypeIPv6::to_string(const IPv6& ipv6_val) const {
+    auto value = IPv6Value(ipv6_val);
+    return value.to_string();
+}
 void DataTypeIPv6::to_string(const IColumn& column, size_t row_num, BufferWritable& ostr) const {
     std::string value = to_string(column, row_num);
     ostr.write(value.data(), value.size());
@@ -48,21 +61,13 @@ void DataTypeIPv6::to_string(const IColumn& column, size_t row_num, BufferWritab
 
 Status DataTypeIPv6::from_string(ReadBuffer& rb, IColumn* column) const {
     auto* column_data = static_cast<ColumnIPv6*>(column);
-    IPv6 value;
-    if (!convert_string_to_ipv6(value, rb.to_string())) {
-        throw doris::Exception(doris::ErrorCode::INVALID_ARGUMENT,
-                               "Invalid value: {} for type IPv6", rb.to_string());
+    IPv6 val = 0;
+    if (!read_ipv6_text_impl<IPv6>(val, rb)) {
+        return Status::InvalidArgument("parse ipv6 fail, string: '{}'",
+                                       std::string(rb.position(), rb.count()).c_str());
     }
-    column_data->insert_value(value);
+    column_data->insert_value(val);
     return Status::OK();
-}
-
-std::string DataTypeIPv6::convert_ipv6_to_string(IPv6 ipv6) {
-    return IPv6Value::to_string(ipv6);
-}
-
-bool DataTypeIPv6::convert_string_to_ipv6(IPv6& x, std::string ipv6) {
-    return IPv6Value::from_string(x, ipv6);
 }
 
 MutableColumnPtr DataTypeIPv6::create_column() const {

@@ -25,6 +25,8 @@
 #include <ostream>
 
 #include "cloud/config.h"
+#include "olap/compaction.h"
+#include "olap/iterators.h"
 #include "olap/olap_common.h"
 #include "olap/olap_define.h"
 #include "olap/rowset/rowset.h"
@@ -53,8 +55,10 @@ VerticalBlockReader::~VerticalBlockReader() {
 
 Status VerticalBlockReader::next_block_with_aggregation(Block* block, bool* eof) {
     auto res = (this->*_next_block_func)(block, eof);
-    if (!res.ok() && !res.is<ErrorCode::END_OF_FILE>() && !config::cloud_mode) [[unlikely]] {
-        static_cast<Tablet*>(_tablet.get())->report_error(res);
+    if (!config::is_cloud_mode()) {
+        if (!res.ok()) [[unlikely]] {
+            static_cast<Tablet*>(_tablet.get())->report_error(res);
+        }
     }
     return res;
 }
@@ -73,7 +77,7 @@ Status VerticalBlockReader::_get_segment_iterators(const ReaderParams& read_para
         return res;
     }
     _reader_context.is_vertical_compaction = true;
-    for (auto& rs_split : read_params.rs_splits) {
+    for (const auto& rs_split : read_params.rs_splits) {
         // segment iterator will be inited here
         // In vertical compaction, every group will load segment so we should cache
         // segment to avoid tot many s3 head request
@@ -106,7 +110,8 @@ Status VerticalBlockReader::_get_segment_iterators(const ReaderParams& read_para
     return Status::OK();
 }
 
-Status VerticalBlockReader::_init_collect_iter(const ReaderParams& read_params) {
+Status VerticalBlockReader::_init_collect_iter(const ReaderParams& read_params,
+                                               CompactionSampleInfo* sample_info) {
     std::vector<bool> iterator_init_flag;
     std::vector<RowsetId> rowset_ids;
     std::vector<RowwiseIteratorUPtr>* segment_iters_ptr = read_params.segment_iters_ptr;
@@ -155,7 +160,10 @@ Status VerticalBlockReader::_init_collect_iter(const ReaderParams& read_params) 
     // init collect iterator
     StorageReadOptions opts;
     opts.record_rowids = read_params.record_rowids;
-    RETURN_IF_ERROR(_vcollect_iter->init(opts));
+    if (read_params.batch_size > 0) {
+        opts.block_row_max = read_params.batch_size;
+    }
+    RETURN_IF_ERROR(_vcollect_iter->init(opts, sample_info));
 
     // In agg keys value columns compact, get first row for _init_agg_state
     if (!read_params.is_key_column_group && read_params.tablet->keys_type() == KeysType::AGG_KEYS) {
@@ -179,7 +187,7 @@ void VerticalBlockReader::_init_agg_state(const ReaderParams& read_params) {
             _next_row.block->create_same_struct_block(_reader_context.batch_size)->mutate_columns();
 
     _stored_has_null_tag.resize(_stored_data_columns.size());
-    _stored_has_string_tag.resize(_stored_data_columns.size());
+    _stored_has_variable_length_tag.resize(_stored_data_columns.size());
 
     auto& tablet_schema = *_tablet_schema;
     for (size_t idx = 0; idx < _return_columns.size(); ++idx) {
@@ -189,31 +197,35 @@ void VerticalBlockReader::_init_agg_state(const ReaderParams& read_params) {
         DCHECK(function != nullptr);
         _agg_functions.push_back(function);
         // create aggregate data
-        AggregateDataPtr place = new char[function->size_of_data()];
+        auto* place = new char[function->size_of_data()];
         SAFE_CREATE(function->create(place), {
             _agg_functions.pop_back();
             delete[] place;
         });
         _agg_places.push_back(place);
 
-        // calculate `has_string` tag.
-        _stored_has_string_tag[idx] =
-                _stored_data_columns[idx]->is_column_string() ||
-                (_stored_data_columns[idx]->is_nullable() &&
-                 reinterpret_cast<ColumnNullable*>(_stored_data_columns[idx].get())
-                         ->get_nested_column_ptr()
-                         ->is_column_string());
+        // calculate `_has_variable_length_tag` tag. like string, array, map
+        _stored_has_variable_length_tag[idx] = _stored_data_columns[idx]->is_variable_length();
     }
 }
 
 Status VerticalBlockReader::init(const ReaderParams& read_params) {
+    return init(read_params, nullptr);
+}
+
+Status VerticalBlockReader::init(const ReaderParams& read_params,
+                                 CompactionSampleInfo* sample_info) {
     StorageReadOptions opts;
-    _reader_context.batch_size = opts.block_row_max;
+    if (read_params.batch_size > 0) {
+        _reader_context.batch_size = read_params.batch_size;
+    } else {
+        _reader_context.batch_size = opts.block_row_max;
+    }
     RETURN_IF_ERROR(TabletReader::init(read_params));
 
-    auto status = _init_collect_iter(read_params);
-    if (!status.ok()) {
-        if (!status.is<ErrorCode::END_OF_FILE>() && !config::cloud_mode) [[unlikely]] {
+    auto status = _init_collect_iter(read_params, sample_info);
+    if (!status.ok()) [[unlikely]] {
+        if (!config::is_cloud_mode()) {
             static_cast<Tablet*>(_tablet.get())->report_error(status);
         }
         return status;
@@ -304,11 +316,11 @@ void VerticalBlockReader::_update_agg_value(MutableColumns& columns, int begin, 
     for (size_t idx = 0; idx < _return_columns.size(); ++idx) {
         AggregateFunctionPtr function = _agg_functions[idx];
         AggregateDataPtr place = _agg_places[idx];
-        auto column_ptr = _stored_data_columns[idx].get();
+        auto* column_ptr = _stored_data_columns[idx].get();
 
         if (begin <= end) {
             function->add_batch_range(begin, end, place, const_cast<const IColumn**>(&column_ptr),
-                                      nullptr, _stored_has_null_tag[idx]);
+                                      &_arena, _stored_has_null_tag[idx]);
         }
 
         if (is_close) {
@@ -316,6 +328,9 @@ void VerticalBlockReader::_update_agg_value(MutableColumns& columns, int begin, 
             // reset aggregate data
             function->reset(place);
         }
+    }
+    if (is_close) {
+        _arena.clear();
     }
 }
 
@@ -328,17 +343,17 @@ size_t VerticalBlockReader::_copy_agg_data() {
     }
     for (size_t idx = 0; idx < _return_columns.size(); ++idx) {
         auto& dst_column = _stored_data_columns[idx];
-        if (_stored_has_string_tag[idx]) {
-            //string type should replace ordered
+        if (_stored_has_variable_length_tag[idx]) {
+            //variable length type should replace ordered
+            dst_column->clear();
             for (size_t i = 0; i < copy_size; i++) {
                 auto& ref = _stored_row_ref[i];
-                dst_column->replace_column_data(*ref.block->get_by_position(idx).column,
-                                                ref.row_pos, i);
+                dst_column->insert_from(*ref.block->get_by_position(idx).column, ref.row_pos);
             }
         } else {
             for (auto& it : _temp_ref_map) {
                 if (!it.second.empty()) {
-                    auto& src_column = *it.first->get_by_position(idx).column;
+                    const auto& src_column = *it.first->get_by_position(idx).column;
                     for (auto& pos : it.second) {
                         dst_column->replace_column_data(src_column, pos.first, pos.second);
                     }
@@ -404,6 +419,7 @@ Status VerticalBlockReader::_agg_key_next_block(Block* block, bool* eof) {
     _agg_data_counters.push_back(_last_agg_data_counter);
     _last_agg_data_counter = 0;
     _update_agg_data(target_columns);
+    block->set_columns(std::move(target_columns));
 
     return Status::OK();
 }
@@ -446,7 +462,7 @@ Status VerticalBlockReader::_unique_key_next_block(Block* block, bool* eof) {
         }
 
         size_t block_rows = block->rows();
-        if (_filter_delete && block_rows > 0) {
+        if (_delete_sign_available && block_rows > 0) {
             int ori_delete_sign_idx = _reader_context.tablet_schema->field_index(DELETE_SIGN);
             if (ori_delete_sign_idx < 0) {
                 *eof = (res.is<END_OF_FILE>());
@@ -536,12 +552,15 @@ Status VerticalBlockReader::_unique_key_next_block(Block* block, bool* eof) {
         }
         const auto& src_block = _next_row.block;
         assert(src_block->columns() == column_count);
-        for (size_t i = 0; i < column_count; ++i) {
-            target_columns[i]->insert_from(*(src_block->get_by_position(i).column),
-                                           _next_row.row_pos);
-        }
+        RETURN_IF_CATCH_EXCEPTION({
+            for (size_t i = 0; i < column_count; ++i) {
+                target_columns[i]->insert_from(*(src_block->get_by_position(i).column),
+                                               _next_row.row_pos);
+            }
+        });
         ++target_block_row;
     } while (target_block_row < _reader_context.batch_size);
+    block->set_columns(std::move(target_columns));
     return Status::OK();
 }
 

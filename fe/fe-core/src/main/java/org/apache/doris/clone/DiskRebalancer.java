@@ -27,6 +27,7 @@ import org.apache.doris.clone.SchedException.SubCode;
 import org.apache.doris.clone.TabletSchedCtx.BalanceType;
 import org.apache.doris.clone.TabletSchedCtx.Priority;
 import org.apache.doris.clone.TabletScheduler.PathSlot;
+import org.apache.doris.common.Config;
 import org.apache.doris.common.FeConstants;
 import org.apache.doris.system.SystemInfoService;
 import org.apache.doris.thrift.TStorageMedium;
@@ -149,8 +150,10 @@ public class DiskRebalancer extends Rebalancer {
         // first we should check if mid backends is available.
         // if all mid backends is not available, we should not start balance
         if (midBEs.stream().noneMatch(BackendLoadStatistic::isAvailable)) {
-            LOG.debug("all mid load backends is dead: {} with medium: {}. skip",
-                    midBEs.stream().mapToLong(BackendLoadStatistic::getBeId).toArray(), medium);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("all mid load backends is dead: {} with medium: {}. skip",
+                        midBEs.stream().mapToLong(BackendLoadStatistic::getBeId).toArray(), medium);
+            }
             return alternativeTablets;
         }
 
@@ -210,7 +213,16 @@ public class DiskRebalancer extends Rebalancer {
                 if (alternativeTabletIds.contains(tabletId)) {
                     continue;
                 }
-                Replica replica = invertedIndex.getReplica(tabletId, beStat.getBeId());
+                if (!Config.enable_disk_balance_for_single_replica
+                        && invertedIndex.getReplicasByTabletId(tabletId).size() <= 1) {
+                    continue;
+                }
+                Replica replica = null;
+                try {
+                    replica = invertedIndex.getReplica(tabletId, beStat.getBeId());
+                } catch (IllegalStateException e) {
+                    continue;
+                }
                 if (replica == null) {
                     continue;
                 }
@@ -297,7 +309,12 @@ public class DiskRebalancer extends Rebalancer {
             throw new SchedException(Status.UNRECOVERABLE,
                 "src does not appear to be set correctly, something goes wrong");
         }
-        Replica replica = invertedIndex.getReplica(tabletCtx.getTabletId(), tabletCtx.getTempSrcBackendId());
+        Replica replica = null;
+        try {
+            replica = invertedIndex.getReplica(tabletCtx.getTabletId(), tabletCtx.getTempSrcBackendId());
+        } catch (IllegalStateException e) {
+            replica = null;
+        }
         // check src replica still there
         if (replica == null || replica.getPathHash() != tabletCtx.getTempSrcPathHash()) {
             throw new SchedException(Status.UNRECOVERABLE, SubCode.DIAGNOSE_IGNORE, "src replica may be rebalanced");
@@ -310,7 +327,9 @@ public class DiskRebalancer extends Rebalancer {
         // check src slot
         PathSlot slot = backendsWorkingSlots.get(replica.getBackendId());
         if (slot == null) {
-            LOG.debug("BE does not have slot: {}", replica.getBackendId());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("BE does not have slot: {}", replica.getBackendId());
+            }
             throw new SchedException(Status.UNRECOVERABLE, "unable to take src slot");
         }
         long pathHash = slot.takeBalanceSlot(replica.getPathHash());
@@ -342,7 +361,9 @@ public class DiskRebalancer extends Rebalancer {
         BalanceStatus bs;
         if ((bs = beStat.isFit(tabletCtx.getTabletSize(), tabletCtx.getStorageMedium(), availPaths,
                 false /* not supplement */)) != BalanceStatus.OK) {
-            LOG.debug("tablet not fit in BE {}, reason: {}", beStat.getBeId(), bs.getErrMsgs());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("tablet not fit in BE {}, reason: {}", beStat.getBeId(), bs.getErrMsgs());
+            }
             throw new SchedException(Status.UNRECOVERABLE, "tablet not fit in BE");
         }
         // Select a low load path as destination.
@@ -354,12 +375,16 @@ public class DiskRebalancer extends Rebalancer {
             }
             // check if avail path is low path
             if (!pathLow.contains(stat.getPathHash())) {
-                LOG.debug("the path :{} is not low load", stat.getPathHash());
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("the path :{} is not low load", stat.getPathHash());
+                }
                 continue;
             }
             if (!beStat.isMoreBalanced(tabletCtx.getSrcPathHash(), stat.getPathHash(),
                     tabletCtx.getTabletId(), tabletCtx.getTabletSize(), tabletCtx.getStorageMedium())) {
-                LOG.debug("the path :{} can not make more balance", stat.getPathHash());
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("the path :{} can not make more balance", stat.getPathHash());
+                }
                 continue;
             }
             long destPathHash = slot.takeBalanceSlot(stat.getPathHash());

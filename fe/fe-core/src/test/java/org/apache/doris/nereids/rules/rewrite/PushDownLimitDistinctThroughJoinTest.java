@@ -38,7 +38,8 @@ class PushDownLimitDistinctThroughJoinTest extends TestWithFeService implements 
     protected void runBeforeAll() throws Exception {
         createDatabase("test");
 
-        connectContext.setDatabase("default_cluster:test");
+        connectContext.setDatabase("test");
+        connectContext.getSessionVariable().setDisableNereidsRules("PRUNE_EMPTY_PARTITION");
 
         createTable("CREATE TABLE `t1` (\n"
                 + "  `k1` int(11) NULL,\n"
@@ -133,7 +134,7 @@ class PushDownLimitDistinctThroughJoinTest extends TestWithFeService implements 
                 .rewrite()
                 .matches(
                         logicalProject(logicalJoin(
-                                logicalLimit(logicalAggregate(logicalProject(logicalOlapScan())))
+                                logicalTopN(logicalAggregate(logicalProject(logicalOlapScan())))
                                         .when(l -> l.getLimit() == 10),
                                 logicalProject(logicalOlapScan())
                         ))

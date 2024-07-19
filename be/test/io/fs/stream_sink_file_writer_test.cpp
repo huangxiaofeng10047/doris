@@ -51,24 +51,29 @@ static std::atomic<int64_t> g_num_request;
 class StreamSinkFileWriterTest : public testing::Test {
     class MockStreamStub : public LoadStreamStub {
     public:
-        MockStreamStub(PUniqueId load_id, int64_t src_id) : LoadStreamStub(load_id, src_id, 1) {};
+        MockStreamStub(PUniqueId load_id, int64_t src_id)
+                : LoadStreamStub(load_id, src_id, std::make_shared<IndexToTabletSchema>(),
+                                 std::make_shared<IndexToEnableMoW>()) {};
 
         virtual ~MockStreamStub() = default;
 
         // APPEND_DATA
         virtual Status append_data(int64_t partition_id, int64_t index_id, int64_t tablet_id,
-                                   int64_t segment_id, std::span<const Slice> data,
-                                   bool segment_eos = false) override {
+                                   int64_t segment_id, uint64_t offset, std::span<const Slice> data,
+                                   bool segment_eos = false,
+                                   FileType file_type = FileType::SEGMENT_FILE) override {
             EXPECT_EQ(PARTITION_ID, partition_id);
             EXPECT_EQ(INDEX_ID, index_id);
             EXPECT_EQ(TABLET_ID, tablet_id);
             EXPECT_EQ(SEGMENT_ID, segment_id);
             if (segment_eos) {
                 EXPECT_EQ(0, data.size());
+                EXPECT_EQ(DATA0.length() + DATA1.length(), offset);
             } else {
                 EXPECT_EQ(2, data.size());
                 EXPECT_EQ(DATA0, data[0].to_string());
                 EXPECT_EQ(DATA1, data[1].to_string());
+                EXPECT_EQ(0, offset);
             }
             g_num_request++;
             return Status::OK();
@@ -102,7 +107,7 @@ TEST_F(StreamSinkFileWriterTest, Test) {
 
     CHECK_STATUS_OK(writer.appendv(&(*slices.begin()), slices.size()));
     EXPECT_EQ(NUM_STREAM, g_num_request);
-    CHECK_STATUS_OK(writer.finalize());
+    CHECK_STATUS_OK(writer.close());
     EXPECT_EQ(NUM_STREAM * 2, g_num_request);
 }
 

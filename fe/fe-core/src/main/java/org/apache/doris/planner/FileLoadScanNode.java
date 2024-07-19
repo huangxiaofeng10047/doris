@@ -25,7 +25,6 @@ import org.apache.doris.analysis.ExprSubstitutionMap;
 import org.apache.doris.analysis.FunctionCallExpr;
 import org.apache.doris.analysis.IntLiteral;
 import org.apache.doris.analysis.NullLiteral;
-// import org.apache.doris.analysis.SchemaChangeExpr;
 import org.apache.doris.analysis.SlotDescriptor;
 import org.apache.doris.analysis.SlotRef;
 import org.apache.doris.analysis.StringLiteral;
@@ -36,14 +35,13 @@ import org.apache.doris.catalog.Column;
 import org.apache.doris.catalog.FunctionSet;
 import org.apache.doris.catalog.PrimitiveType;
 import org.apache.doris.catalog.Table;
-// import org.apache.doris.catalog.TableIf;
 import org.apache.doris.common.AnalysisException;
 import org.apache.doris.common.UserException;
+import org.apache.doris.datasource.FederationBackendPolicy;
+import org.apache.doris.datasource.FileGroupInfo;
+import org.apache.doris.datasource.FileScanNode;
+import org.apache.doris.datasource.LoadScanProvider;
 import org.apache.doris.load.BrokerFileGroup;
-import org.apache.doris.planner.external.FederationBackendPolicy;
-import org.apache.doris.planner.external.FileGroupInfo;
-import org.apache.doris.planner.external.FileScanNode;
-import org.apache.doris.planner.external.LoadScanProvider;
 import org.apache.doris.rewrite.ExprRewriter;
 import org.apache.doris.statistics.StatisticalType;
 import org.apache.doris.system.BeSelectionPolicy;
@@ -133,7 +131,8 @@ public class FileLoadScanNode extends FileScanNode {
             // FIXME(cmy): we should support set different expr for different file group.
             initAndSetPrecedingFilter(context.fileGroup.getPrecedingFilterExpr(), context.srcTupleDescriptor, analyzer);
             initAndSetWhereExpr(context.fileGroup.getWhereExpr(), context.destTupleDescriptor, analyzer);
-            setDefaultValueExprs(scanProvider.getTargetTable(), context.srcSlotDescByName, context.params, true);
+            setDefaultValueExprs(scanProvider.getTargetTable(), context.srcSlotDescByName,
+                    context.exprMap, context.params, true);
             this.contexts.add(context);
         }
     }
@@ -207,7 +206,7 @@ public class FileLoadScanNode extends FileScanNode {
             LoadScanProvider scanProvider = scanProviders.get(i);
             finalizeParamsForLoad(context, analyzer);
             createScanRangeLocations(context, scanProvider, localBackendPolicy);
-            this.inputSplitsNum += scanProvider.getInputSplitNum();
+            this.selectedSplitNum += scanProvider.getInputSplitNum();
             this.totalFileSize += scanProvider.getInputFileSize();
         }
     }
@@ -282,9 +281,11 @@ public class FileLoadScanNode extends FileScanNode {
                 }
                 FunctionCallExpr fn = (FunctionCallExpr) expr;
                 if (!fn.getFnName().getFunction().equalsIgnoreCase(FunctionSet.HLL_HASH) && !fn.getFnName()
-                        .getFunction().equalsIgnoreCase("hll_empty")) {
+                        .getFunction().equalsIgnoreCase("hll_empty")
+                        && !fn.getFnName().getFunction().equalsIgnoreCase(FunctionSet.HLL_FROM_BASE64)) {
                     throw new AnalysisException("HLL column must use " + FunctionSet.HLL_HASH + " function, like "
                         + destSlotDesc.getColumn().getName() + "=" + FunctionSet.HLL_HASH + "(xxx) or "
+                        + destSlotDesc.getColumn().getName() + "=" + FunctionSet.HLL_FROM_BASE64 + "(xxx) or "
                         + destSlotDesc.getColumn().getName() + "=hll_empty()");
                 }
                 expr.setType(org.apache.doris.catalog.Type.HLL);
@@ -353,4 +354,3 @@ public class FileLoadScanNode extends FileScanNode {
         }
     }
 }
-

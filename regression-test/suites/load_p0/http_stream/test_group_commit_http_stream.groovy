@@ -33,20 +33,11 @@ suite("test_group_commit_http_stream") {
     }
 
     def getAlterTableState = {
-        def retry = 0
-        while (true) {
-            sleep(8000)
-            def state = sql "show alter table column where tablename = '${tableName}' order by CreateTime desc "
-            logger.info("alter table retry: ${retry},  state: ${state}")
-            if (state.size() > 0 && state[0][9] == "FINISHED") {
-                return true
-            }
-            retry++
-            if (retry >= 40) {
-                return false
-            }
+        waitForSchemaChangeDone {
+            sql """ SHOW ALTER TABLE COLUMN WHERE tablename='${tableName}' ORDER BY createtime DESC LIMIT 1 """
+            time 600
         }
-        return false
+        return true
     }
 
     def checkStreamLoadResult = { exception, result, total_rows, loaded_rows, filtered_rows, unselected_rows ->
@@ -67,6 +58,17 @@ suite("test_group_commit_http_stream") {
         } else {
             assertTrue(json.ErrorURL == null || json.ErrorURL.isEmpty())
         }
+    }
+
+    def checkStreamLoadResult2 = { exception, result ->
+        if (exception != null) {
+            throw exception
+        }
+        log.info("Stream load result: ${result}".toString())
+        def json = parseJson(result)
+        assertEquals("success", json.Status.toLowerCase())
+        assertTrue(json.GroupCommit)
+        assertTrue(json.Label.startsWith("group_commit_"))
     }
 
     try {
@@ -100,7 +102,7 @@ suite("test_group_commit_http_stream") {
                     insert into ${db}.${tableName} select * from http_stream
                     ("format"="csv", "compress_type"="${compressionType}", "column_separator"=",")
                 """
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 file "${fileName}"
                 unset 'label'
 
@@ -120,7 +122,7 @@ suite("test_group_commit_http_stream") {
                     ("format"="csv", "column_separator"=",")
             """
 
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             file "test_stream_load1.csv"
             unset 'label'
 
@@ -139,7 +141,7 @@ suite("test_group_commit_http_stream") {
                     ("format"="csv", "column_separator"="|")
             """
 
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             file "test_stream_load2.csv"
             unset 'label'
 
@@ -158,7 +160,7 @@ suite("test_group_commit_http_stream") {
                     ("format"="csv", "column_separator"=",") where c1 > 5
             """
 
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             file "test_stream_load1.csv"
             unset 'label'
 
@@ -166,7 +168,8 @@ suite("test_group_commit_http_stream") {
 
             check { result, exception, startTime, endTime ->
                 // TODO different with stream load: 2, 1, 0, 1
-                checkStreamLoadResult(exception, result, 1, 1, 0, 0)
+                //checkStreamLoadResult(exception, result, 1, 1, 0, 0)
+                checkStreamLoadResult2(exception, result)
             }
         }
 
@@ -178,7 +181,7 @@ suite("test_group_commit_http_stream") {
                     ("format"="csv", "column_separator"=",")
             """
 
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             file "test_stream_load1.csv"
             unset 'label'
 
@@ -198,16 +201,24 @@ suite("test_group_commit_http_stream") {
                     select c1, c2, c3 from http_stream ("format"="csv", "column_separator"=",") where c2 = 'a'
             """
 
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             file "test_stream_load3.csv"
-            set 'max_filter_ratio', '0.7'
+            // TODO max_filter_ratio is not supported http_stream
+            // set 'max_filter_ratio', '0.7'
             unset 'label'
 
             time 10000 // limit inflight 10s
 
             check { result, exception, startTime, endTime ->
                 // TODO different with stream load: 6, 2, 3, 1
-                checkStreamLoadResult(exception, result, 6, 4, 2, 0)
+                // checkStreamLoadResult(exception, result, 5, 4, 1, 0)
+                if (exception != null) {
+                    throw exception
+                }
+                log.info("Stream load result: ${result}".toString())
+                def json = parseJson(result)
+                assertEquals("fail", json.Status.toLowerCase())
+                assertTrue(json.Message.contains("too many filtered rows"))
             }
         }
 
@@ -220,7 +231,7 @@ suite("test_group_commit_http_stream") {
                     ("format"="csv", "column_separator"="|")
             """
 
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             file "test_stream_load2.csv"
 
             time 10000 // limit inflight 10s
@@ -234,7 +245,7 @@ suite("test_group_commit_http_stream") {
             }
         }
 
-        getRowCount(23)
+        getRowCount(19)
         qt_sql " SELECT * FROM ${tableName} order by id, name, score asc; "
     } finally {
         // try_sql("DROP TABLE ${tableName}")
@@ -306,7 +317,7 @@ suite("test_group_commit_http_stream") {
                     ("format"="csv", "compress_type"="GZ", "column_separator"="|")
                 """
 
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 unset 'label'
 
                 file """${getS3Url()}/regression/ssb/sf0.1/lineorder.tbl.gz"""

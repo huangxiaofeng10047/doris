@@ -30,6 +30,10 @@ suite("nereids_tvf") {
     """
 
     sql """
-        select QueryId from queries() where `Sql` like "%test_queries_tvf%";
+        select query_id from information_schema.active_queries where `sql` like "%test_queries_tvf%";
+    """
+
+    sql """
+        select * from numbers("number" = "1") union all select * from numbers("number" = "1");
     """
 }

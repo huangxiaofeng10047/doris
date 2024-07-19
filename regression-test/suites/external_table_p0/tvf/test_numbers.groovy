@@ -23,6 +23,11 @@
     qt_basic3 """ select * from numbers("number" = "100"); """
     qt_basic4_limit """ select * from numbers("number" = "10") limit 5; """
 
+    qt_const1 """ select * from numbers("number" = "5", "const_value" = "1"); """
+    qt_const2 """ select * from numbers("number" = "5", "const_value" = "-123"); """
+    qt_const3 """ select * from numbers("number" = "-10", "const_value" = "1"); """
+    qt_const4 """ select avg(number) from numbers("number" = "100", "const_value" = "123"); """
+
     // Test aggregate function withh numbers("number" = N)
     qt_agg_sum """ select sum(number) from numbers("number" = "100"); """
     qt_agg_avg """ select avg(number) from numbers("number" = "100"); """
@@ -34,17 +39,17 @@
     qt_inner_join1 """
                     select a.number as num1, b.number as num2
                     from numbers("number" = "10") a inner join numbers("number" = "10") b 
-                    on a.number=b.number;
+                    on a.number=b.number ORDER BY a.number,b.number;
                   """
     qt_inner_join2 """
                     select a.number as num1, b.number as num2
                     from numbers("number" = "6") a inner join numbers("number" = "6") b
-                    on a.number>b.number;
+                    on a.number>b.number ORDER BY a.number,b.number;
                   """
     qt_inner_join3 """
                     select a.number as num1, b.number as num2
                     from numbers("number" = "10") a inner join numbers("number" = "10") b
-                    on a.number=b.number and b.number%2 = 0;
+                    on a.number=b.number and b.number%2 = 0 ORDER BY a.number,b.number;
                   """
     qt_left_join """
                     select a.number as num1, b.number as num2
@@ -65,7 +70,7 @@
     qt_join_where """
                     select a.number as num1, b.number as num2
                     from numbers("number" = "10") a inner join numbers("number" = "10") b 
-                    on a.number=b.number where a.number>4;
+                    on a.number=b.number where a.number>4 order by num1,num2;
                   """
     
     // Test Sub Query
@@ -129,13 +134,13 @@
         sql """ select * from numbers('number' = 'abc'); """
 
         // check exception
-        exception "can not parse `number` param to natural number"
+        exception "cannot parse param value abc"
     }
 
     test {
         sql """ select * from numbers(); """
 
         // check exception
-        exception """can not find `number` param, please specify `number`, like: numbers("number" = "10")"""
+        exception """number not set"""
     }
  }

@@ -89,13 +89,13 @@ public class StreamLoadTask implements LoadTaskInfo {
     private boolean enableProfile = false;
 
     private boolean memtableOnSinkNode = false;
-    private int streamPerNode = 20;
+    private int streamPerNode = 2;
 
     private byte enclose = 0;
 
     private byte escape = 0;
 
-    private boolean groupCommit = false;
+    private String groupCommit;
 
     public StreamLoadTask(TUniqueId id, long txnId, TFileType fileType, TFileFormatType formatType,
             TFileCompressType compressType) {
@@ -324,7 +324,7 @@ public class StreamLoadTask implements LoadTaskInfo {
                 request.getFileType(), request.getFormatType(),
                 request.getCompressType());
         streamLoadTask.setOptionalFromTSLPutRequest(request);
-        streamLoadTask.setGroupCommit(request.isGroupCommit());
+        streamLoadTask.setGroupCommit(request.getGroupCommitMode());
         if (request.isSetFileSize()) {
             streamLoadTask.fileSize = request.getFileSize();
         }
@@ -538,12 +538,11 @@ public class StreamLoadTask implements LoadTaskInfo {
         return maxFilterRatio;
     }
 
-    public void setGroupCommit(boolean groupCommit) {
+    public void setGroupCommit(String groupCommit) {
         this.groupCommit = groupCommit;
     }
 
-    public boolean isGroupCommit() {
+    public String getGroupCommit() {
         return groupCommit;
     }
 }
-

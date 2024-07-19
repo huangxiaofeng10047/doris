@@ -100,7 +100,10 @@ suite ("mv_ssb_q_3_1") {
 
     sql """INSERT INTO lineorder_flat (LO_ORDERDATE, LO_ORDERKEY, LO_LINENUMBER, LO_CUSTKEY, LO_PARTKEY, LO_SUPPKEY, LO_ORDERPRIORITY, LO_SHIPPRIORITY, LO_QUANTITY, LO_EXTENDEDPRICE, LO_ORDTOTALPRICE, LO_DISCOUNT, LO_REVENUE, LO_SUPPLYCOST, LO_TAX, LO_COMMITDATE, LO_SHIPMODE,C_NAME,C_ADDRESS,C_CITY,C_NATION,C_REGION,C_PHONE,C_MKTSEGMENT,S_NAME,S_ADDRESS,S_CITY,S_NATION,S_REGION,S_PHONE,P_NAME,P_MFGR,P_CATEGORY,P_BRAND,P_COLOR,P_TYPE,P_SIZE,P_CONTAINER) VALUES (19930101 , 2 , 2 , 2 , 2 , 2 ,'2',2 ,2 ,2 ,2 ,2 ,2 ,2 ,2 ,'2023-06-09','shipmode','name','address','city','nation','region','phone','mktsegment','name','address','city','nation','region','phone','name','mfgr','category','brand','color','type',4,'container');"""
 
-    qt_select_star "select * from lineorder_flat order by 1,2;"
+    qt_select_star "select * from lineorder_flat order by 1,2,P_MFGR;"
+
+    sql """analyze table lineorder_flat with sync;"""
+    sql """set enable_stats=false;"""
 
     explain {
         sql("""SELECT
@@ -129,6 +132,22 @@ suite ("mv_ssb_q_3_1") {
                         AND LO_ORDERDATE <= 19971231
                     GROUP BY C_NATION, S_NATION, YEAR
                     ORDER BY YEAR ASC, revenue DESC;"""
+    sql """set enable_stats=true;"""
+    explain {
+        sql("""SELECT
+                C_NATION,
+                S_NATION, (LO_ORDERDATE DIV 10000) AS YEAR,
+                SUM(LO_REVENUE) AS revenue
+            FROM lineorder_flat
+            WHERE
+                C_REGION = 'ASIA'
+                AND S_REGION = 'ASIA'
+                AND LO_ORDERDATE >= 19920101
+                AND LO_ORDERDATE <= 19971231
+            GROUP BY C_NATION, S_NATION, YEAR
+            ORDER BY YEAR ASC, revenue DESC;""")
+        contains "(lineorder_q_3_1)"
+    }
 
     sql""" drop materialized view lineorder_q_3_1 on lineorder_flat; """
 

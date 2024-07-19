@@ -46,7 +46,7 @@
           "type": "long"
         },
         "c_unsigned_long": {
-          "type": "unsigned_long"
+          "type": "long"
         },
         "c_float": {
           "type": "float"
@@ -87,6 +87,18 @@
               "type": "integer"
             }
           }
+        },
+        "message": {
+          "type": "text",
+          "fields": {
+            "keyword": {
+              "type": "keyword",
+              "ignore_above": 256
+            }
+          }
+        },
+        "c_user": {
+          "type": "nested"
         }
       }
     }

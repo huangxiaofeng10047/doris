@@ -17,6 +17,7 @@
 
 #include "olap/olap_meta.h"
 
+#include <bvar/latency_recorder.h>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
 #include <rocksdb/env.h>
@@ -55,6 +56,10 @@ namespace doris {
 using namespace ErrorCode;
 const std::string META_POSTFIX = "/meta";
 const size_t PREFIX_LENGTH = 4;
+
+bvar::LatencyRecorder g_meta_put_latency("meta_put");
+bvar::LatencyRecorder g_meta_get_latency("meta_get");
+bvar::LatencyRecorder g_meta_remove_latency("meta_remove");
 
 OlapMeta::OlapMeta(const std::string& root_path) : _root_path(root_path) {}
 
@@ -117,7 +122,6 @@ Status OlapMeta::init() {
 }
 
 Status OlapMeta::get(const int column_family_index, const std::string& key, std::string* value) {
-    DorisMetrics::instance()->meta_read_request_total->increment(1);
     auto& handle = _handles[column_family_index];
     int64_t duration_ns = 0;
     rocksdb::Status s;
@@ -125,7 +129,7 @@ Status OlapMeta::get(const int column_family_index, const std::string& key, std:
         SCOPED_RAW_TIMER(&duration_ns);
         s = _db->Get(ReadOptions(), handle.get(), rocksdb::Slice(key), value);
     }
-    DorisMetrics::instance()->meta_read_request_duration_us->increment(duration_ns / 1000);
+    g_meta_get_latency << (duration_ns / 1000);
     if (s.IsNotFound()) {
         return Status::Error<META_KEY_NOT_FOUND>("OlapMeta::get meet not found key");
     } else if (!s.ok()) {
@@ -137,7 +141,6 @@ Status OlapMeta::get(const int column_family_index, const std::string& key, std:
 
 bool OlapMeta::key_may_exist(const int column_family_index, const std::string& key,
                              std::string* value) {
-    DorisMetrics::instance()->meta_read_request_total->increment(1);
     auto& handle = _handles[column_family_index];
     int64_t duration_ns = 0;
     bool is_exist = false;
@@ -145,15 +148,13 @@ bool OlapMeta::key_may_exist(const int column_family_index, const std::string& k
         SCOPED_RAW_TIMER(&duration_ns);
         is_exist = _db->KeyMayExist(ReadOptions(), handle.get(), rocksdb::Slice(key), value);
     }
-    DorisMetrics::instance()->meta_read_request_duration_us->increment(duration_ns / 1000);
+    g_meta_get_latency << (duration_ns / 1000);
 
     return is_exist;
 }
 
 Status OlapMeta::put(const int column_family_index, const std::string& key,
                      const std::string& value) {
-    DorisMetrics::instance()->meta_write_request_total->increment(1);
-
     // log all params
     VLOG_DEBUG << "column_family_index: " << column_family_index << ", key: " << key
                << ", value: " << value;
@@ -162,9 +163,7 @@ Status OlapMeta::put(const int column_family_index, const std::string& key,
     rocksdb::Status s;
     {
         int64_t duration_ns = 0;
-        Defer defer([&] {
-            DorisMetrics::instance()->meta_write_request_duration_us->increment(duration_ns / 1000);
-        });
+        Defer defer([&] { g_meta_put_latency << (duration_ns / 1000); });
         SCOPED_RAW_TIMER(&duration_ns);
 
         WriteOptions write_options;
@@ -180,15 +179,11 @@ Status OlapMeta::put(const int column_family_index, const std::string& key,
 }
 
 Status OlapMeta::put(const int column_family_index, const std::vector<BatchEntry>& entries) {
-    DorisMetrics::instance()->meta_write_request_total->increment(1);
-
     auto* handle = _handles[column_family_index].get();
     rocksdb::Status s;
     {
         int64_t duration_ns = 0;
-        Defer defer([&] {
-            DorisMetrics::instance()->meta_write_request_duration_us->increment(duration_ns / 1000);
-        });
+        Defer defer([&] { g_meta_put_latency << (duration_ns / 1000); });
         SCOPED_RAW_TIMER(&duration_ns);
 
         // construct write batch
@@ -212,14 +207,10 @@ Status OlapMeta::put(const int column_family_index, const std::vector<BatchEntry
 }
 
 Status OlapMeta::put(rocksdb::WriteBatch* batch) {
-    DorisMetrics::instance()->meta_write_request_total->increment(1);
-
     rocksdb::Status s;
     {
         int64_t duration_ns = 0;
-        Defer defer([&] {
-            DorisMetrics::instance()->meta_write_request_duration_us->increment(duration_ns / 1000);
-        });
+        Defer defer([&] { g_meta_put_latency << (duration_ns / 1000); });
         SCOPED_RAW_TIMER(&duration_ns);
 
         WriteOptions write_options;
@@ -234,7 +225,6 @@ Status OlapMeta::put(rocksdb::WriteBatch* batch) {
 }
 
 Status OlapMeta::remove(const int column_family_index, const std::string& key) {
-    DorisMetrics::instance()->meta_write_request_total->increment(1);
     auto& handle = _handles[column_family_index];
     rocksdb::Status s;
     int64_t duration_ns = 0;
@@ -244,7 +234,7 @@ Status OlapMeta::remove(const int column_family_index, const std::string& key) {
         write_options.sync = config::sync_tablet_meta;
         s = _db->Delete(write_options, handle.get(), rocksdb::Slice(key));
     }
-    DorisMetrics::instance()->meta_write_request_duration_us->increment(duration_ns / 1000);
+    g_meta_remove_latency << (duration_ns / 1000);
     if (!s.ok()) {
         return Status::Error<META_DELETE_ERROR>("rocks db delete key: {}, failed, reason: {}", key,
                                                 s.ToString());
@@ -253,7 +243,6 @@ Status OlapMeta::remove(const int column_family_index, const std::string& key) {
 }
 
 Status OlapMeta::remove(const int column_family_index, const std::vector<std::string>& keys) {
-    DorisMetrics::instance()->meta_write_request_total->increment(1);
     auto& handle = _handles[column_family_index];
     rocksdb::Status s;
     int64_t duration_ns = 0;
@@ -267,7 +256,7 @@ Status OlapMeta::remove(const int column_family_index, const std::vector<std::st
         }
         s = _db->Write(write_options, &batch);
     }
-    DorisMetrics::instance()->meta_write_request_duration_us->increment(duration_ns / 1000);
+    g_meta_remove_latency << (duration_ns / 1000);
     if (!s.ok()) {
         return Status::Error<META_DELETE_ERROR>("rocks db delete keys:{} failed, reason:{}", keys,
                                                 s.ToString());
@@ -275,20 +264,20 @@ Status OlapMeta::remove(const int column_family_index, const std::vector<std::st
     return Status::OK();
 }
 
-Status OlapMeta::iterate(const int column_family_index, const std::string& prefix,
-                         std::function<bool(const std::string&, const std::string&)> const& func) {
+Status OlapMeta::iterate(const int column_family_index, std::string_view prefix,
+                         std::function<bool(std::string_view, std::string_view)> const& func) {
     return iterate(column_family_index, prefix, prefix, func);
 }
 
-Status OlapMeta::iterate(const int column_family_index, const std::string& seek_key,
-                         const std::string& prefix,
-                         std::function<bool(const std::string&, const std::string&)> const& func) {
+Status OlapMeta::iterate(const int column_family_index, std::string_view seek_key,
+                         std::string_view prefix,
+                         std::function<bool(std::string_view, std::string_view)> const& func) {
     auto& handle = _handles[column_family_index];
     std::unique_ptr<Iterator> it(_db->NewIterator(ReadOptions(), handle.get()));
-    if (seek_key == "") {
+    if (seek_key.empty()) {
         it->SeekToFirst();
     } else {
-        it->Seek(seek_key);
+        it->Seek({seek_key.data(), seek_key.size()});
     }
     rocksdb::Status status = it->status();
     if (!status.ok()) {
@@ -297,14 +286,13 @@ Status OlapMeta::iterate(const int column_family_index, const std::string& seek_
     }
 
     for (; it->Valid(); it->Next()) {
-        if (prefix != "") {
-            if (!it->key().starts_with(prefix)) {
+        if (!prefix.empty()) {
+            if (!it->key().starts_with({prefix.data(), prefix.size()})) {
                 return Status::OK();
             }
         }
-        std::string key = it->key().ToString();
-        std::string value = it->value().ToString();
-        bool ret = func(key, value);
+        bool ret = func({it->key().data(), it->key().size()},
+                        {it->value().data(), it->value().size()});
         if (!ret) {
             break;
         }

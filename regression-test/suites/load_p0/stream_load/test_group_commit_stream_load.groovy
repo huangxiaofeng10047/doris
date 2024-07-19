@@ -32,20 +32,11 @@ suite("test_group_commit_stream_load") {
     }
 
     def getAlterTableState = {
-        def retry = 0
-        while (true) {
-            sleep(8000)
-            def state = sql "show alter table column where tablename = '${tableName}' order by CreateTime desc "
-            logger.info("alter table retry: ${retry},  state: ${state}")
-            if (state.size() > 0 && state[0][9] == "FINISHED") {
-                return true
-            }
-            retry++
-            if (retry >= 40) {
-                return false
-            }
+        waitForSchemaChangeDone {
+            sql """ SHOW ALTER TABLE COLUMN WHERE tablename='${tableName}' ORDER BY createtime DESC LIMIT 1 """
+            time 600
         }
-        return false
+        return true
     }
 
     def checkStreamLoadResult = { exception, result, total_rows, loaded_rows, filtered_rows, unselected_rows ->
@@ -97,7 +88,7 @@ suite("test_group_commit_stream_load") {
                 table "${tableName}"
 
                 set 'column_separator', ','
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 set 'compress_type', "${compressionType}"
                 // set 'columns', 'id, name, score'
                 file "${fileName}"
@@ -116,7 +107,7 @@ suite("test_group_commit_stream_load") {
             table "${tableName}"
 
             set 'column_separator', ','
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             set 'columns', 'id, name'
             file "test_stream_load1.csv"
             unset 'label'
@@ -133,7 +124,7 @@ suite("test_group_commit_stream_load") {
             table "${tableName}"
 
             set 'column_separator', '|'
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             set 'columns', 'score, id, name'
             file "test_stream_load2.csv"
             unset 'label'
@@ -150,7 +141,7 @@ suite("test_group_commit_stream_load") {
             table "${tableName}"
 
             set 'column_separator', ','
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             set 'columns', 'id, name'
             file "test_stream_load1.csv"
             set 'where', 'id > 5'
@@ -168,7 +159,7 @@ suite("test_group_commit_stream_load") {
             table "${tableName}"
 
             set 'column_separator', ','
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             set 'columns', 'id, name, score = id * 10'
             file "test_stream_load1.csv"
             unset 'label'
@@ -185,7 +176,7 @@ suite("test_group_commit_stream_load") {
             table "${tableName}"
 
             set 'column_separator', ','
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             file "test_stream_load3.csv"
             set 'where', "name = 'a'"
             set 'max_filter_ratio', '0.7'
@@ -204,7 +195,7 @@ suite("test_group_commit_stream_load") {
 
             // set 'label', 'test_stream_load'
             set 'column_separator', '|'
-            set 'group_commit', 'true'
+            set 'group_commit', 'async_mode'
             // set 'label', 'l_' + System.currentTimeMillis()
             file "test_stream_load2.csv"
 
@@ -289,7 +280,7 @@ suite("test_group_commit_stream_load") {
                 set 'column_separator', '|'
                 set 'compress_type', 'GZ'
                 set 'columns', columns + ",lo_dummy"
-                set 'group_commit', 'true'
+                set 'group_commit', 'async_mode'
                 unset 'label'
 
                 file """${getS3Url()}/regression/ssb/sf0.1/lineorder.tbl.gz"""
